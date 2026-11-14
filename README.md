@@ -19,7 +19,7 @@ reply streams in above the input.
 | ⌃J ⌃N / ⌃K ⌃P | Move down / up in the ⌘K picker, or scroll the reply |
 
 - **Target thread**: the thread at the top of T3's sidebar. That is the top pinned thread, or the top active thread when nothing is pinned. ⌘K picks another thread for one prompt.
-- **Status dot**: while the overlay is hidden, a dot right of the notch shows the target thread: grey idle (also shown with no chat or when T3 is off), pulsing green running, orange needs you, red failed, blue check for a reply you haven't seen. Click it to open the overlay.
+- **Status dot**: while the overlay is hidden, a dot right of the notch shows the target thread: grey idle (also shown with no chat or when T3 is off), dark green running, orange needs you, red failed, blue check for a reply you haven't seen. Click it to open the overlay.
 - **Peek**: while an agent runs, hover over the notch to see its reply.
 - **Done**: when a run you started here finishes, the reply appears for 8 seconds.
 - **Needs you**: when the agent asks for approval or a question, the overlay opens and stays open.

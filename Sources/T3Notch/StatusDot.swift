@@ -86,7 +86,7 @@ private struct StatusDotView: View {
 }
 
 /// The dot for one state. One SF Symbol morphs between states (`.replace`), bounces when
-/// the state changes, and pulses while running. Also used by `--render-dots`.
+/// the state changes. Also used by `--render-dots`.
 struct StatusDotGlyph: View {
     let indicator: Store.Indicator
     var animate = true
@@ -94,7 +94,7 @@ struct StatusDotGlyph: View {
     private var spec: (symbol: String, color: Color, scale: CGFloat) {
         switch indicator {
         case .hidden, .idle: return ("circle.fill", .gray.opacity(0.6), 0.5)
-        case .running: return ("circle.fill", .green, 0.6)
+        case .running: return ("circle.fill", Color(red: 0.12, green: 0.55, blue: 0.24), 0.6) // dark green, steady
         case .needsYou: return ("exclamationmark.circle.fill", .orange, 1)
         case .failed: return ("xmark.circle.fill", .red, 1)
         case .done: return ("checkmark.circle.fill", .blue, 1)
@@ -109,7 +109,6 @@ struct StatusDotGlyph: View {
                     .foregroundStyle(spec.color)
                     .scaleEffect(spec.scale)
                     .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer)))
-                    .symbolEffect(.pulse, options: .repeating, isActive: animate && indicator == .running)
                     .symbolEffect(.bounce, options: .nonRepeating, value: animate ? indicator : .idle)
                     .transition(.blurReplace.combined(with: .scale(0.2)))
             }
@@ -124,7 +123,7 @@ struct StatusDotGlyph: View {
 enum DotPreview {
     static func render(to path: String) {
         let states: [(Store.Indicator, String)] = [
-            (.idle, "Idle, or no chat / T3 off"), (.running, "Running (pulses)"), (.needsYou, "Needs you"),
+            (.idle, "Idle, or no chat / T3 off"), (.running, "Running"), (.needsYou, "Needs you"),
             (.failed, "Failed"), (.done, "Reply you haven't seen"), (.hidden, "Hidden (overlay open)"),
         ]
         let view = VStack(alignment: .leading, spacing: 14) {
