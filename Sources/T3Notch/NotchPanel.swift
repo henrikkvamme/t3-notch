@@ -263,6 +263,8 @@ final class PanelController {
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎
             Task { await store.respond(decision: "acceptForSession") }; return true
+        case 36 where cmd && !ui.pickerOpen: // ⌘⏎ steers the running turn
+            sendDraft(steer: true); return true
         case 36 where approval && !ui.pickerOpen && ui.draft.isEmpty: // ⏎
             Task { await store.respond(decision: "accept") }; return true
         case 125 where ui.pickerOpen: // ↓
@@ -294,6 +296,13 @@ final class PanelController {
     private func scrollReply(by step: Int) {
         let y = min(max(ui.replyOffset + CGFloat(step) * 64, 0), ui.replyMaxOffset)
         withAnimation(Motion.snappy) { ui.replyScroll.scrollTo(y: y) }
+    }
+
+    private func sendDraft(steer: Bool) {
+        let text = ui.draft
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        withAnimation(Motion.content) { ui.draft = "" }
+        Task { await store.send(text, steer: steer) }
     }
 
     private func setPicker(_ open: Bool) {

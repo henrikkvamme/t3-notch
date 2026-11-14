@@ -397,7 +397,10 @@ final class Store {
 
     // MARK: - Commands
 
-    func send(_ text: String) async {
+    /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
+    /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
+    /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
+    func send(_ text: String, steer: Bool = false) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let threadId = targetThreadId else {
@@ -411,18 +414,23 @@ final class Store {
         lastSendError = nil
         localSends[threadId] = Date().timeIntervalSince1970 * 1000
         overrideThreadId = nil
+        var command: [String: JSON] = [
+            "type": "message.dispatch",
+            "commandId": .string(id),
+            "threadId": .string(threadId),
+            "messageId": .string(id),
+            "text": .string(trimmed),
+            "attachments": [],
+            "dispatchMode": ["type": "queue_after_active"],
+            "createdBy": "user",
+            "creationSource": "web",
+        ]
+        if steer {
+            command["dispatchMode"] = ["type": "start_immediately"]
+            command["deliveryIntent"] = "steer"
+        }
         do {
-            _ = try await rpc.call("orchestration.dispatchCommand", [
-                "type": "message.dispatch",
-                "commandId": .string(id),
-                "threadId": .string(threadId),
-                "messageId": .string(id),
-                "text": .string(trimmed),
-                "attachments": [],
-                "dispatchMode": ["type": "queue_after_active"],
-                "createdBy": "user",
-                "creationSource": "web",
-            ])
+            _ = try await rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = threadId
         } catch {
             handleCommandError(error)

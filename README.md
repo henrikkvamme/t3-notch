@@ -9,8 +9,9 @@ reply streams in above the input.
 | Key | Action |
 | --- | --- |
 | ⌥Space | Show or hide the overlay |
-| ⏎ | Send (or Accept a pending approval when the input is empty) |
-| ⌘⏎ | Accept the approval for this session |
+| ⏎ | Send; while the agent runs, queue it after the current turn (or Accept a pending approval when the input is empty) |
+| ⌘⏎ | Steer the running turn with this message (starts normally when idle) |
+| ⌘⏎ (approval showing) | Accept the approval for this session |
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Send the next prompt to another thread |
 | ⌘. | Stop the running agent |

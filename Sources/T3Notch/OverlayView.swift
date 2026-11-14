@@ -257,10 +257,19 @@ struct OverlayView: View {
             .font(.system(size: 14))
             .lineLimit(1...6)
             .padding(.horizontal, 14).padding(.vertical, 10)
+            .overlay(alignment: .bottomTrailing) {
+                // While the agent works, ⏎ queues and ⌘⏎ steers; say so once there is text.
+                if store.isTargetActive && !ui.draft.isEmpty {
+                    Text("⏎ queue · ⌘⏎ steer").font(.caption2).foregroundStyle(.tertiary)
+                        .padding(.trailing, 12).padding(.bottom, 8)
+                        .transition(.blurReplace)
+                }
+            }
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
             .glassEffectID("field", in: glass) // morphs into the ⌘K search field
             .onSubmit(sendDraft)
             .animation(Motion.content, value: ui.draft.isEmpty)
+            .animation(Motion.content, value: store.isTargetActive)
     }
 
     private var picker: some View {
