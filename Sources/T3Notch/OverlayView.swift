@@ -16,6 +16,9 @@ final class OverlayUIState {
     var draft = ""
     /// Screen clips waiting to go with the next message.
     var clips: [Clip] = []
+    /// Permissions clipping still needs; each shows as a button that opens its settings.
+    var missingPermissions: [Permission] = []
+    var onOpenPermission: ((Permission) -> Void)?
     /// Answers being composed for a user-input request, by question id.
     var answers: [String: String] = [:]
     /// The island's frame in the hosting view (top-left origin), for click-through.
@@ -88,7 +91,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId, ui.clips.count]
+         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId, ui.clips.count, ui.missingPermissions.count]
     }
 
     private var content: some View {
@@ -114,6 +117,9 @@ struct OverlayView: View {
                                 }
                             }
                             // The input takes no space, spacing included, until you type.
+                            if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
+                                permissionRow.padding(.top, 10).transition(.blurReplace)
+                            }
                             if ui.mode == .expanded && !ui.clips.isEmpty {
                                 clipRow.padding(.top, 10).transition(.blurReplace)
                             }
@@ -421,6 +427,26 @@ struct OverlayView: View {
         let parts = [item?["prompt"].string, item?["reason"].string, item?["title"].string, item?["input"].string]
             .compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    /// One button per missing permission; each opens System Settings on that list.
+    private var permissionRow: some View {
+        HStack(spacing: 8) {
+            ForEach(ui.missingPermissions) { permission in
+                Button { ui.onOpenPermission?(permission) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.fill").font(.system(size: 10, weight: .semibold))
+                        Text(permission.title).font(.callout)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .glassEffect(.regular.tint(.orange.opacity(0.25)).interactive(), in: .capsule)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .transition(.blurReplace.combined(with: .scale(0.9)))
+            }
+        }
+        .animation(Motion.content, value: ui.missingPermissions)
     }
 
     /// Clips waiting to be sent; click one to remove it.

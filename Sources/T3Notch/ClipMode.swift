@@ -33,17 +33,9 @@ final class ClipController {
 
     /// Captures the screens and shows the overlay. Calls `onFinish` with the clips taken
     /// (possibly none) when the mode ends; `onFailure` if capture is not allowed.
-    static func start(onFinish: @escaping ([Clip]) -> Void, onFailure: @escaping (String) -> Void) -> ClipController? {
-        guard CGPreflightScreenCaptureAccess() else {
-            CGRequestScreenCaptureAccess()
-            onFailure("Screen Recording is off for T3 Notch. Turn it on in System Settings › Privacy & Security.")
-            return nil
-        }
-        // Element picking needs Accessibility; without it, hover picks whole windows.
-        if !AXIsProcessTrusted() {
-            let key = "AXTrustedCheckOptionPrompt" // kAXTrustedCheckOptionPrompt, which Swift 6 flags as shared mutable state
-            _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        }
+    /// Captures the screens and shows the overlay; calls `onFinish` with the clips taken
+    /// (possibly none). The caller checks Screen Recording first (see `Permission`).
+    static func start(onFinish: @escaping ([Clip]) -> Void) -> ClipController {
         let controller = ClipController(onFinish: onFinish)
         Task { await controller.begin() }
         return controller

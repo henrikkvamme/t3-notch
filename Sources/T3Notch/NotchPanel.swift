@@ -92,6 +92,7 @@ final class PanelController {
         self.ui = OverlayUIState()
         ui.onClose = { [weak self] in self?.hide() }
         ui.onOpenInT3 = { [weak self] in self?.openInT3() }
+        ui.onOpenPermission = { permission in permission.openSettings() }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
@@ -384,23 +385,61 @@ final class PanelController {
     private var clipper: ClipController?
 
     /// ⌘P: hide the island at once (so it is not in the frozen frame), clip, then come back.
+    /// ⌘P. Without Screen Recording, show the permission buttons and start on its own once
+    /// it is granted. Without Accessibility, clip anyway (hover picks whole windows) and
+    /// offer that button afterwards.
     private func startClipping() {
         guard clipper == nil else { return }
+        guard Permission.screenRecording.isGranted else {
+            clipWhenAllowed = true
+            showMissingPermissions()
+            return
+        }
+        clipWhenAllowed = false
         orderOutTask?.cancel()
         ui.mode = .hidden
         ui.pickerOpen = false
         panel.ignoresMouseEvents = true
         panel.orderOut(nil)
-        clipper = ClipController.start(onFinish: { [weak self] clips in
+        clipper = ClipController.start { [weak self] clips in
             guard let self else { return }
             self.clipper = nil
             self.ui.clips += clips
             self.expand()
-        }, onFailure: { [weak self] message in
-            self?.store.lastSendError = message
-            self?.clipper = nil
-            self?.expand()
-        })
+            self.showMissingPermissions()
+        }
+    }
+
+    // MARK: - Permissions
+
+    private var clipWhenAllowed = false
+    private var permissionTimer: Timer?
+
+    /// Shows a button per missing permission and watches for grants while any are missing.
+    private func showMissingPermissions() {
+        withAnimation(Motion.content) { ui.missingPermissions = Permission.missing }
+        guard !ui.missingPermissions.isEmpty, permissionTimer == nil else { return }
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkPermissions() }
+        }
+    }
+
+    private func checkPermissions() {
+        if ui.missingPermissions.contains(.screenRecording) {
+            Task { await Permission.confirmScreenRecordingLive() }
+        }
+        let missing = Permission.missing
+        if missing != ui.missingPermissions {
+            withAnimation(Motion.content) { ui.missingPermissions = missing }
+        }
+        if Permission.screenRecording.isGranted, clipWhenAllowed {
+            clipWhenAllowed = false
+            if ui.mode == .expanded { startClipping() }
+        }
+        if missing.isEmpty {
+            permissionTimer?.invalidate()
+            permissionTimer = nil
+        }
     }
 
     private func setPicker(_ open: Bool) {
