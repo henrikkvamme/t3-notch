@@ -389,10 +389,11 @@ final class Store {
         let active: Set<String> = ["preparing", "queued", "starting", "running", "waiting"]
         let oldStatus = old?["activityRunStatus"].string ?? old?["status"].string ?? ""
         let newStatus = new["activityRunStatus"].string ?? new["status"].string ?? ""
-        if awaitingThreadId == id, active.contains(oldStatus), !active.contains(newStatus) {
+        // The focused chat's run ended (finished, failed or stopped), whoever started it.
+        if active.contains(oldStatus), !active.contains(newStatus) {
             awaitingThreadId = nil
             unseenReply = true
-            onAttentionNeeded?(.finished)
+            if Settings.showWhenChatFinishes { onAttentionNeeded?(.finished) }
         }
     }
 
@@ -550,5 +551,14 @@ final class Store {
             comps.queryItems = [URLQueryItem(name: "prompt", value: String(prompt.prefix(7900)))]
         }
         if let url = comps.url { NSWorkspace.shared.open(url) }
+    }
+}
+
+/// User settings, kept in UserDefaults.
+enum Settings {
+    /// Pop the island open when the focused chat's run ends. On by default.
+    static var showWhenChatFinishes: Bool {
+        get { UserDefaults.standard.object(forKey: "showWhenChatFinishes") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "showWhenChatFinishes") }
     }
 }

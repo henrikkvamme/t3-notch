@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? FileManager.default.createDirectory(at: FrameLog.directory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(FrameLog.directory)
     }
+    @objc private func toggleShowWhenFinished() { Settings.showWhenChatFinishes.toggle() }
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
         do {
@@ -90,6 +91,8 @@ extension AppDelegate: NSMenuDelegate {
         add(menu, "Reconnect", #selector(reconnect))
         add(menu, "Reissue Token", #selector(resetToken))
         add(menu, "Open Logs Folder", #selector(openLogs))
+        let finish = add(menu, "Show When Chat Finishes", #selector(toggleShowWhenFinished))
+        finish.state = Settings.showWhenChatFinishes ? .on : .off
         let login = add(menu, "Launch at Login", #selector(toggleLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())

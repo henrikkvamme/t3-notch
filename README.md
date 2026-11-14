@@ -24,7 +24,7 @@ reply streams in above the input.
 - **Chat**: prompts go to the chat you pick in the ⌘K list, which mirrors T3's sidebar (pinned, then active, then the rest). There is no default: with no chat picked, opening the island shows the list.
 - **Status dot**: while the overlay is hidden, a dot right of the notch shows the target thread: grey idle (also shown with no chat or when T3 is off), dark green running, orange needs you, red failed, blue check for a reply you haven't seen. Click it to open the overlay. It hides while an app is fullscreen on that screen.
 - **Peek**: while an agent runs, hover over the notch to see its reply.
-- **Done**: when a run you started here finishes, the reply appears for 8 seconds.
+- **Done**: when the focused chat finishes or stops, the reply appears for 8 seconds. Turn this off with **Show When Chat Finishes** in the menu bar icon's menu.
 - **Needs you**: when the agent asks for approval or a question, the overlay opens and stays open.
 
 On a screen without a notch, the overlay draws one at the top centre.
