@@ -118,6 +118,7 @@ but each rebuild asks for those permissions again. Choose an identity with `make
 | ⌘. | Stop the running agent |
 | ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list, or scroll the reply |
 | ⌘Z / ⌃Z | Bring back a removed clip |
+| ⌥⇧Space | Hide or show the status dot, from any app |
 
 ### Clipping
 
@@ -144,12 +145,14 @@ list, so only the toggle is left.
 | Red ✕ | The last run failed |
 | Blue ✓ | A reply you haven't opened yet |
 
-Click the dot to open the island.
+Click the dot to open the island. It hides while an app is fullscreen, and ⌥⇧Space (or **Hide Status Dot** in
+the menu) hides it until you show it again.
 
 ### Menu bar icon
 
 - **Show When Chat Finishes** (on by default) pops the island open with the reply when the chat's run ends,
   unless you are already in T3 Code. Clicking the popped-up island opens it fully.
+- **Hide Status Dot** (⌥⇧Space).
 - **Launch at Login**, **Reconnect**, **Reissue Token**, and **Open Logs Folder**.
 
 ## How it works

@@ -56,7 +56,8 @@ final class StatusDotController {
     }
 
     private func checkFullscreen() {
-        let now = Self.isFullscreen(on: Self.notchScreen)
+        let screen = Self.notchScreen
+        let now = Spaces.isFullscreenSpace(on: screen) || Self.isFullscreen(on: screen)
         if ui.notchScreenFullscreen != now { ui.notchScreenFullscreen = now }
     }
 
@@ -124,7 +125,7 @@ private struct StatusDotView: View {
 
     /// No dot while the island is open: the island's own header shows the status.
     static func effective(store: Store, ui: OverlayUIState) -> Store.Indicator {
-        ui.mode == .hidden && !ui.notchScreenFullscreen ? store.indicator : .hidden
+        ui.mode == .hidden && !ui.notchScreenFullscreen && !ui.dotHiddenByUser ? store.indicator : .hidden
     }
 
     @State private var hovering = false
@@ -220,5 +221,42 @@ enum DotPreview {
         }
         try? png.write(to: URL(fileURLWithPath: path))
         print("wrote \(path)")
+    }
+}
+
+/// Whether a screen's current desktop space is a fullscreen one, from macOS's own record of
+/// spaces (SkyLight's `CGSCopyManagedDisplaySpaces`, as window managers such as yabai use).
+/// It is private API, loaded at run time; if it is ever missing, this answers false and the
+/// window-shape check above still runs.
+enum Spaces {
+    private typealias MainConnection = @convention(c) () -> Int32
+    private typealias CopyDisplaySpaces = @convention(c) (Int32) -> Unmanaged<CFArray>?
+
+    private static let functions: (MainConnection, CopyDisplaySpaces)? = {
+        guard let lib = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY),
+              let main = dlsym(lib, "CGSMainConnectionID"),
+              let copy = dlsym(lib, "CGSCopyManagedDisplaySpaces") else { return nil }
+        return (unsafeBitCast(main, to: MainConnection.self), unsafeBitCast(copy, to: CopyDisplaySpaces.self))
+    }()
+
+    /// Space type 4 is a fullscreen app's space.
+    static func isFullscreenSpace(on screen: NSScreen) -> Bool {
+        guard let (main, copy) = functions,
+              let displays = copy(main())?.takeRetainedValue() as? [[String: Any]] else { return false }
+        let uuid = displayUUID(screen)
+        for display in displays {
+            let id = display["Display Identifier"] as? String
+            // "Main" when "Displays have separate Spaces" is off: one set of spaces for all.
+            guard id == "Main" || id == uuid || displays.count == 1,
+                  let current = display["Current Space"] as? [String: Any] else { continue }
+            if (current["type"] as? Int) == 4 { return true }
+        }
+        return false
+    }
+
+    private static func displayUUID(_ screen: NSScreen) -> String? {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
     }
 }

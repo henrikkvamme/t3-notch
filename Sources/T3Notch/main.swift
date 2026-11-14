@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ServiceManagement
 
 @MainActor
@@ -6,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = Store()
     private var panel: PanelController!
     private var hotkey: Hotkey!
+    private var dotHotkey: Hotkey!
     private var statusItem: NSStatusItem!
     private var statusDot: StatusDotController!
     private var demo: DemoController?
@@ -13,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(store: store)
         hotkey = Hotkey { [weak self] in self?.panel.toggle() }
+        // ⌥⇧Space hides or shows the status dot, e.g. while watching a film.
+        dotHotkey = Hotkey(modifiers: UInt32(optionKey | shiftKey), id: 2) { [weak self] in self?.toggleDot() }
         store.onAttentionNeeded = { [weak self] reason in
             guard let self, self.panel.mode == .hidden else { return }
             // Already in T3 Code: it shows the reply and the request itself.
@@ -68,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(FrameLog.directory)
     }
     @objc private func toggleShowWhenFinished() { Settings.showWhenChatFinishes.toggle() }
+    @objc private func toggleDot() { panel.ui.dotHiddenByUser.toggle() }
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
         do {
@@ -99,6 +104,10 @@ extension AppDelegate: NSMenuDelegate {
         add(menu, "Reconnect", #selector(reconnect))
         add(menu, "Reissue Token", #selector(resetToken))
         add(menu, "Open Logs Folder", #selector(openLogs))
+        let dot = add(menu, "Hide Status Dot", #selector(toggleDot))
+        dot.state = panel.ui.dotHiddenByUser ? .on : .off
+        dot.keyEquivalent = " "
+        dot.keyEquivalentModifierMask = [.option, .shift]
         let finish = add(menu, "Show When Chat Finishes", #selector(toggleShowWhenFinished))
         finish.state = Settings.showWhenChatFinishes ? .on : .off
         let login = add(menu, "Launch at Login", #selector(toggleLogin))

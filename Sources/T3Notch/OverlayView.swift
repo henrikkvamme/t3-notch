@@ -42,6 +42,10 @@ final class OverlayUIState {
     var islandFrame: CGRect = .zero
     /// An app is fullscreen on the notch screen; the status dot hides.
     var notchScreenFullscreen = false
+    /// Hidden with ⌥⇧Space (or the menu); remembered across launches.
+    var dotHiddenByUser = UserDefaults.standard.bool(forKey: "statusDotHidden") {
+        didSet { UserDefaults.standard.set(dotHiddenByUser, forKey: "statusDotHidden") }
+    }
     /// The reply's scroll position, so ⌃J/⌃K can scroll it from the keyboard.
     var replyScroll = ScrollPosition(edge: .top)
     var replyOffset: CGFloat = 0
