@@ -267,13 +267,6 @@ struct OverlayView: View {
             .font(.system(size: 14))
             .lineLimit(1...6)
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .overlay(alignment: .bottomTrailing) {
-                // While the agent works, ⏎ queues and ⌘⏎ steers.
-                if store.isTargetActive && typing {
-                    Text("⏎ queue · ⌘⏎ steer").font(.caption2).foregroundStyle(.tertiary)
-                        .padding(.trailing, 12).padding(.bottom, 8)
-                        .transition(.blurReplace)
-                }
             }
             .glassEffect(typing ? .regular.interactive() : .identity, in: .rect(cornerRadius: 16))
             .glassEffectID("field", in: glass) // morphs into the ⌘K search field
@@ -287,7 +280,6 @@ struct OverlayView: View {
             // Collapsing can drop keyboard focus; take it back so the next key types.
             .onChange(of: typing) { _, now in if !now { ui.onRequestFocus?() } }
             .animation(Motion.open, value: typing)
-            .animation(Motion.content, value: store.isTargetActive)
     }
 
     private var picker: some View {
