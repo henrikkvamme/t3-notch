@@ -16,6 +16,19 @@ final class OverlayUIState {
     var draft = ""
     /// Screen clips waiting to go with the next message.
     var clips: [Clip] = []
+    /// Removed clips, newest last, with their old position, for ⌘Z / ⌃Z.
+    var removedClips: [(clip: Clip, index: Int)] = []
+    /// The draft when the last clip was removed; undo restores clips only while it is unchanged,
+    /// so ⌘Z after typing still undoes typing.
+    var draftAtClipRemoval = ""
+
+    /// Brings back the most recently removed clip. False when there is nothing to restore.
+    func undoClipRemoval() -> Bool {
+        guard let last = removedClips.last, draft == draftAtClipRemoval else { return false }
+        removedClips.removeLast()
+        clips.insert(last.clip, at: min(last.index, clips.count))
+        return true
+    }
     /// Permissions clipping still needs; each shows as a button that opens its settings.
     var missingPermissions: [Permission] = []
     var onOpenPermission: ((Permission) -> Void)?
@@ -400,7 +413,7 @@ struct OverlayView: View {
         let text = ui.draft
         let images = ui.clips.map(\.png)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = [] }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = [] }
         Task { await store.send(text, images: images) }
     }
 
@@ -480,7 +493,11 @@ struct OverlayView: View {
                         }
                         .onTapGesture {
                             withAnimation(Motion.content) {
-                                ui.clips.removeAll { $0.id == clip.id }
+                                if let i = ui.clips.firstIndex(of: clip) {
+                                    ui.removedClips.append((clip, i))
+                                    ui.draftAtClipRemoval = ui.draft
+                                    ui.clips.remove(at: i)
+                                }
                                 if hoveredClip == clip.id { hoveredClip = nil }
                             }
                         }

@@ -312,6 +312,8 @@ final class PanelController {
             return true
         }
         let cmd = event.modifierFlags.contains(.command)
+        let ctrl = event.modifierFlags.contains(.control)
+        let shift = event.modifierFlags.contains(.shift)
         let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
         switch event.keyCode {
         case 53: // Esc
@@ -322,6 +324,10 @@ final class PanelController {
             setPicker(!ui.pickerOpen); return true
         case 31 where cmd: // ⌘O opens the thread in T3 and hides the island
             openInT3(); return true
+        case 6 where (cmd || ctrl) && !shift: // ⌘Z / ⌃Z: restore a removed clip, else normal undo
+            var restored = false
+            withAnimation(Motion.content) { restored = ui.undoClipRemoval() }
+            return restored
         case 35 where cmd: // ⌘P enters clipping mode
             startClipping(); return true
         case 47 where cmd: // ⌘.
@@ -376,7 +382,7 @@ final class PanelController {
         let text = ui.draft
         let images = ui.clips.map(\.png)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = [] }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = [] }
         Task { await store.send(text, steer: steer, images: images) }
     }
 
