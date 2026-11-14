@@ -234,12 +234,17 @@ private struct SettingsView: View {
     }
 
     private var buttons: some View {
-        HStack(spacing: 8) {
+        // Even row: the same padding in every button and the same gap between all five,
+        // stretched to the card's edges.
+        HStack(spacing: 0) {
             pill("Reconnect") { model.actions.reconnect() }
+            Spacer(minLength: 6)
             pill("New token") { model.actions.newToken() }
+            Spacer(minLength: 6)
             pill("Logs") { model.actions.openLogs() }
-            Spacer(minLength: 0)
+            Spacer(minLength: 6)
             updateButton
+            Spacer(minLength: 6)
             iconButton("power") { model.actions.quit() }
         }
     }
@@ -331,7 +336,9 @@ private struct SettingsView: View {
         Button(action: action) {
             Text(title).font(.system(size: 12, weight: .medium))
                 .lineLimit(1).fixedSize()
-                .padding(.horizontal, 11).padding(.vertical, 7)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .capsule)
