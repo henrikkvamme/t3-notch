@@ -19,6 +19,7 @@ final class StatusDotController {
         self.store = store
         self.ui = ui
         panel = NotchPanel()
+        panel.allowsKey = false
         panel.level = .statusBar + 1
         panel.contentView = FirstClickHostingView(rootView: StatusDotView(store: store, ui: ui, onClick: onClick))
         place()

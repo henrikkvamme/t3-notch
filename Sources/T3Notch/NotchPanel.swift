@@ -20,7 +20,9 @@ final class NotchPanel: NSPanel {
         animationBehavior = .none
     }
 
-    override var canBecomeKey: Bool { true }
+    /// The status dot sets this false so clicking it never takes keyboard focus.
+    var allowsKey = true
+    override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
 }
 
@@ -101,6 +103,12 @@ final class PanelController {
             MainActor.assumeIsolated { self?.updateMouse() }
             return event
         }
+        // Whenever the island takes keyboard focus (hotkey, or a click on it), remember the
+        // app that had it, so hiding the island can hand focus straight back.
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rememberFrontApp() }
+        }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
@@ -118,6 +126,7 @@ final class PanelController {
         store.markReplySeen()
         let wasHidden = ui.mode == .hidden
         if wasHidden { place(on: NotchGeometry.screenUnderMouse()) }
+        rememberFrontApp()
         present()
         panel.makeKey()
         animateMode(.expanded, afterLayout: wasHidden)
@@ -133,8 +142,24 @@ final class PanelController {
         if autoHide { schedulePeekHide(after: 8) }
     }
 
+    /// The app that had keyboard focus before the island took it.
+    private var previousApp: NSRunningApplication?
+
+    private func rememberFrontApp() {
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
+    }
+
+    /// Gives keyboard focus back to the app you were in, if the island had taken it.
+    private func returnFocus() {
+        guard panel.isKeyWindow else { return }
+        panel.resignKey()
+        previousApp?.activate()
+    }
+
     func hide() {
         peekHideTask?.cancel()
+        returnFocus()
         withAnimation(Motion.close) {
             ui.mode = .hidden
             ui.pickerOpen = false
