@@ -165,13 +165,24 @@ struct OverlayView: View {
                     .transition(.blurReplace.combined(with: .scale(0.8)))
             }
             Spacer(minLength: 8)
-            Button { store.openTargetInT3() } label: {
-                Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
-                    .frame(width: 22, height: 22)
+            // Own container with no merge distance, so the two circles stay apart.
+            GlassEffectContainer(spacing: 0) {
+                HStack(spacing: 6) {
+                Button { ui.onClose?() } label: {
+                    Image(systemName: "minus").font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                Button { store.openTargetInT3() } label: {
+                    Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .help("Open in T3  ⌘O")
+                }
             }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .circle)
-            .help("Open in T3  ⌘O")
         }
         .animation(Motion.content, value: title)
         .animation(Motion.content, value: store.overrideThreadId)
