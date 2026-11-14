@@ -104,6 +104,11 @@ extension AppDelegate: NSMenuDelegate {
     }
 }
 
+if let i = CommandLine.arguments.firstIndex(of: "--render-dots"), CommandLine.arguments.count > i + 1 {
+    MainActor.assumeIsolated { DotPreview.render(to: CommandLine.arguments[i + 1]) }
+    exit(0)
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()

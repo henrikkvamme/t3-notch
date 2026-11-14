@@ -49,11 +49,25 @@ final class StatusDotController {
 private struct StatusDotView: View {
     let store: Store
     let onClick: () -> Void
+
+    var body: some View {
+        StatusDotGlyph(indicator: store.indicator)
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onClick)
+            .help(store.targetThread?["title"].string ?? "T3")
+    }
+}
+
+/// The dot itself for one state; also used by `--render-dots` to draw previews.
+struct StatusDotGlyph: View {
+    let indicator: Store.Indicator
+    var animate = true
     @State private var pulse = false
 
     var body: some View {
         ZStack {
-            switch store.indicator {
+            switch indicator {
             case .hidden:
                 EmptyView()
             case .idle:
@@ -62,7 +76,7 @@ private struct StatusDotView: View {
                 Circle().fill(.green).frame(width: 8, height: 8)
                     .opacity(pulse ? 0.35 : 1)
                     .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                    .onAppear { pulse = true }
+                    .onAppear { if animate { pulse = true } }
                     .onDisappear { pulse = false }
             case .needsYou:
                 Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(.orange)
@@ -73,8 +87,46 @@ private struct StatusDotView: View {
             }
         }
         .frame(width: 22, height: 22)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onClick)
-        .help(store.targetThread?["title"].string ?? "T3")
+    }
+}
+
+/// Draws every dot state beside a notch into one PNG: `T3Notch --render-dots out.png`.
+@MainActor
+enum DotPreview {
+    static func render(to path: String) {
+        let states: [(Store.Indicator, String)] = [
+            (.idle, "Idle"), (.running, "Running (pulses)"), (.needsYou, "Needs you"),
+            (.failed, "Failed"), (.done, "Reply you haven't seen"), (.hidden, "Hidden (overlay open / T3 off)"),
+        ]
+        let view = VStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(states.enumerated()), id: \.offset) { _, s in
+                HStack(spacing: 18) {
+                    ZStack {
+                        Rectangle().fill(Color(white: 0.16)) // menu bar
+                        HStack(spacing: 8) {
+                            UnevenRoundedRectangle(bottomLeadingRadius: 10, bottomTrailingRadius: 10)
+                                .fill(.black).frame(width: 190, height: 32)
+                            StatusDotGlyph(indicator: s.0, animate: false)
+                        }
+                        .offset(x: 15)
+                    }
+                    .frame(width: 300, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text(s.1).font(.system(size: 13)).foregroundStyle(.white)
+                }
+            }
+        }
+        .padding(20)
+        .background(Color(white: 0.08))
+        .environment(\.colorScheme, .dark)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
+            print("render failed"); return
+        }
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("wrote \(path)")
     }
 }
