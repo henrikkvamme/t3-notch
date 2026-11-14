@@ -14,12 +14,13 @@ reply streams in above the input.
 | ⌘⏎ (approval showing) | Accept the approval for this session |
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Pick the chat |
-| ⌘O | Open the thread in T3 |
+| ⌘O | Open the chat in T3, taking the draft and clips along |
 | ⌘P | Clip part of the screen into the next message |
 | ⌘. | Stop the running agent |
 | ⌃J ⌃N / ⌃K ⌃P | Move down / up in the ⌘K picker, or scroll the reply |
 
 - **Clipping (⌘P)**: the screen freezes. Hover to pick a UI element (scroll to grow or shrink it) and click, or drag a rectangle. Releasing adds the clip and returns to the island; hold ⇧ while releasing to keep clipping, and the next release without ⇧ brings them all back. ⎋ leaves without adding. Clips sit above the input: hover one for a larger preview, click to remove it (⌘Z or ⌃Z brings it back). They are sent as images with your next message. Needs Screen Recording; element picking also needs Accessibility (without it, hover picks whole windows).
+- **Handoff**: T3 keeps drafts only inside its window, so there is no live sync. ⌘O (or ↗) carries the island's text into T3's chat box and pastes the clips in as attachments (the paste needs Accessibility; without it they are left on the clipboard).
 - **Chat**: prompts go to the chat you pick in the ⌘K list, which mirrors T3's sidebar (pinned, then active, then the rest). There is no default: with no chat picked, opening the island shows the list.
 - **Status dot**: while the overlay is hidden, a dot right of the notch shows the target thread: grey idle (also shown with no chat or when T3 is off), dark green running, orange needs you, red failed, blue check for a reply you haven't seen. Click it to open the overlay. It hides while an app is fullscreen on that screen.
 - **Peek**: while an agent runs, hover over the notch to see its reply.

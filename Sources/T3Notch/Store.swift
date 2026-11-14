@@ -534,16 +534,21 @@ final class Store {
     static let appScheme = "t3code"
 
     /// Opens the target thread in T3.
-    func openTargetInT3() {
+    /// Opens the focused chat in T3. With `prompt`, T3 fills its chat box with it (its own
+    /// prompt-link format; T3 asks first if that chat already has a draft).
+    func openTargetInT3(prompt: String? = nil) {
         guard let id = targetThreadId, environmentId != nil else {
             if let pid = runtime?.pid { NSRunningApplication(processIdentifier: pid)?.activate() }
             return
         }
         // Thread ids can contain ":" (e.g. "mcp:…"), so encode each path segment.
         let segment = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/:"))) ?? s }
-        if let env = environmentId,
-           let url = URL(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))") {
-            NSWorkspace.shared.open(url)
+        guard let env = environmentId,
+              var comps = URLComponents(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))")
+        else { return }
+        if let prompt, !prompt.isEmpty {
+            comps.queryItems = [URLQueryItem(name: "prompt", value: String(prompt.prefix(7900)))]
         }
+        if let url = comps.url { NSWorkspace.shared.open(url) }
     }
 }

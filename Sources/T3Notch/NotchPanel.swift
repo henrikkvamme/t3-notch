@@ -160,9 +160,19 @@ final class PanelController {
     }
 
     /// Opens the thread in T3 (which takes focus) and hides the island.
+    /// Opens the chat in T3 and hands over what is in the island: the draft text fills T3's
+    /// chat box and the clips are pasted in as attachments. The island is cleared, since the
+    /// draft now lives in T3.
     func openInT3() {
+        let text = ui.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let clips = ui.clips
         hide(returnFocus: false)
-        store.openTargetInT3()
+        store.openTargetInT3(prompt: text.isEmpty ? nil : text)
+        guard !text.isEmpty || !clips.isEmpty, store.targetThreadId != nil else { return }
+        ui.draft = ""
+        ui.clips = []
+        ui.removedClips = []
+        if let pid = store.runtime?.pid { Handoff.pasteClips(clips, into: pid) }
     }
 
     /// Gives keyboard focus back to the app you were in, if the island had taken it.
