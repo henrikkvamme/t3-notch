@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import SwiftUI
 
 /// Borderless, non-activating panel over the notch. It is a fixed transparent canvas: the
@@ -172,12 +173,15 @@ final class PanelController {
         let text = ui.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let clips = ui.clips
         hide(returnFocus: false)
-        store.openTargetInT3(prompt: text.isEmpty ? nil : text)
+        // With clips, the text is pasted after them (see Handoff); without, the link carries it.
+        let pid = store.runtime?.app?.processIdentifier
+        let pasteText = !clips.isEmpty && pid != nil && AXIsProcessTrusted()
+        store.openTargetInT3(prompt: text.isEmpty || pasteText ? nil : text)
         guard !text.isEmpty || !clips.isEmpty, store.targetThreadId != nil else { return }
         ui.draft = ""
         ui.clips = []
         ui.removedClips = []
-        if let pid = store.runtime?.app?.processIdentifier { Handoff.pasteClips(clips, into: pid) }
+        if let pid { Handoff.pasteClips(clips, text: pasteText ? text : "", into: pid) }
     }
 
     /// Gives keyboard focus back to the app you were in, if the island had taken it.

@@ -10,14 +10,14 @@ enum Handoff {
     /// process only, so it can never land in another app. The previous clipboard comes back
     /// afterwards. Without Accessibility (needed to send keys), the first clip is left on the
     /// clipboard to paste by hand. Steps are logged to ~/Library/Logs/T3Notch/handoff.log.
-    static func pasteClips(_ clips: [Clip], into pid: pid_t) {
+    static func pasteClips(_ clips: [Clip], text: String = "", into pid: pid_t) {
         guard !clips.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         let saved = snapshot(pasteboard)
         let trusted = AXIsProcessTrusted()
         log("handoff: \(clips.count) clip(s) to pid \(pid), accessibility=\(trusted)")
         guard trusted else {
-            // Can't send keys: leave the first clip on the clipboard to paste by hand.
+            // Can't paste for you: leave the first clip on the clipboard to paste by hand.
             put(clips[0].png, on: pasteboard)
             return
         }
@@ -36,6 +36,15 @@ enum Handoff {
                 let viaMenu = pressPasteMenuItem(of: pid)
                 if !viaMenu { sendPaste(to: pid) }
                 log("handoff: pasted clip \(i + 1) via \(viaMenu ? "Edit › Paste" : "⌘V")")
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+            // The text goes last, as its own paste: a prompt link would race the image paste,
+            // and T3 will not drop a link's prompt into a chat box that already has a draft.
+            if !text.isEmpty {
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+                if !pressPasteMenuItem(of: pid) { sendPaste(to: pid) }
+                log("handoff: pasted text (\(text.count) chars)")
                 try? await Task.sleep(for: .milliseconds(350))
             }
             try? await Task.sleep(for: .milliseconds(800))
