@@ -725,6 +725,12 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "showToolSteps") }
     }
 
+    /// Peek at the focused chat when the pointer moves onto the notch. On by default.
+    static var expandOnHover: Bool {
+        get { UserDefaults.standard.object(forKey: "expandOnHover") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
+    }
+
     /// Pop the island open when the focused chat's run ends. On by default.
     static var showWhenChatFinishes: Bool {
         get { Store.demo || (UserDefaults.standard.object(forKey: "showWhenChatFinishes") as? Bool ?? true) }

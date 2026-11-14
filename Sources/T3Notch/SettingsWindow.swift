@@ -11,7 +11,7 @@ final class SettingsController {
     private var resignObserver: Any?
     private var keyMonitor: Any?
     private var closeTask: Task<Void, Never>?
-    private static let size = CGSize(width: 340, height: 520)
+    private static let size = CGSize(width: 340, height: 560)
 
     init(store: Store, updater: Updater, ui: OverlayUIState, actions: SettingsModel.Actions) {
         model = SettingsModel(store: store, updater: updater, ui: ui, actions: actions)
@@ -133,6 +133,9 @@ final class SettingsModel {
     var showToolSteps = Settings.showToolSteps {
         didSet { Settings.showToolSteps = showToolSteps }
     }
+    var expandOnHover = Settings.expandOnHover {
+        didSet { Settings.expandOnHover = expandOnHover }
+    }
     var launchAtLogin = SMAppService.mainApp.status == .enabled
     var checking = false
     var upToDate = false
@@ -147,6 +150,7 @@ final class SettingsModel {
     func refresh() {
         showWhenChatFinishes = Settings.showWhenChatFinishes
         showToolSteps = Settings.showToolSteps
+        expandOnHover = Settings.expandOnHover
         launchAtLogin = SMAppService.mainApp.status == .enabled
         upToDate = false
     }
@@ -226,6 +230,8 @@ private struct SettingsView: View {
 
     private var switches: some View {
         VStack(spacing: 0) {
+            row("Expand on notch hover", isOn: $model.expandOnHover)
+            divider
             row("Show when chat finishes", isOn: $model.showWhenChatFinishes)
             divider
             row("Show commands while working", isOn: $model.showToolSteps)

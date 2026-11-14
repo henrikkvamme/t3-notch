@@ -281,7 +281,8 @@ final class PanelController {
     }
 
     private func checkNotchHover(_ p: NSPoint) {
-        guard store.isTargetActive || store.pendingRequest != nil else { return }
+        // Setting on: any focused chat, not over a fullscreen app.
+        guard Settings.expandOnHover, store.targetThread != nil, !ui.notchScreenFullscreen else { return }
         let g = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
         if NSMouseInRect(p, g.notchRect.insetBy(dx: -8, dy: 0), false) {
             peek(autoHide: false)

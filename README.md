@@ -168,6 +168,7 @@ settings) hides it until you show it again.
 
 Right-click (or ⌃-click) the status dot, or press ⌘, in the island. Esc or a click elsewhere closes it.
 
+- **Expand on notch hover** (on by default): moving the pointer onto the notch peeks at the focused chat.
 - **Show when chat finishes** (on by default) pops the island open with the reply when the chat's run ends,
   unless you are already in T3 Code. Clicking the popped-up island opens it fully.
 - **Show commands while working** (off by default): besides the thinking, show the agent's commands and tool
