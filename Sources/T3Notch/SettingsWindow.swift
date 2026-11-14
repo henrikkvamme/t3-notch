@@ -11,7 +11,7 @@ final class SettingsController {
     private var resignObserver: Any?
     private var keyMonitor: Any?
     private var closeTask: Task<Void, Never>?
-    private static let size = CGSize(width: 340, height: 420)
+    private static let size = CGSize(width: 340, height: 520)
 
     init(store: Store, updater: Updater, ui: OverlayUIState, actions: SettingsModel.Actions) {
         model = SettingsModel(store: store, updater: updater, ui: ui, actions: actions)
@@ -24,6 +24,13 @@ final class SettingsController {
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self, self.panel.isKeyWindow else { return e }
+            let recording = MainActor.assumeIsolated { self.model.recording != nil }
+            if recording {
+                MainActor.assumeIsolated {
+                    if e.keyCode == 53 { self.model.cancelRecording() } else { self.model.record(e) }
+                }
+                return nil
+            }
             let cmd = e.modifierFlags.contains(.command)
             if e.keyCode == 53 || (cmd && e.keyCode == 43) || (cmd && e.keyCode == 13) { // Esc, ⌘, or ⌘W
                 MainActor.assumeIsolated { self.close() }
@@ -48,6 +55,7 @@ final class SettingsController {
 
     func close() {
         guard model.shown else { return }
+        if model.recording != nil { model.cancelRecording() }
         withAnimation(Motion.close) { model.shown = false }
         closeTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(320))
@@ -76,6 +84,42 @@ final class SettingsModel {
         var newToken: () -> Void
         var openLogs: () -> Void
         var quit: () -> Void
+        var rebind: (Shortcut, KeyBinding) -> Bool
+        var pauseShortcuts: (Bool) -> Void
+    }
+
+    enum Shortcut { case showIsland, toggleDot }
+
+    /// The shortcut being recorded, if any; the next key press sets it.
+    var recording: Shortcut?
+    /// The shortcut whose last recording was refused (already in use).
+    var taken: Shortcut?
+    var showIslandKey = Settings.showIslandKey
+    var toggleDotKey = Settings.toggleDotKey
+
+    func startRecording(_ shortcut: Shortcut) {
+        taken = nil
+        recording = shortcut
+        actions.pauseShortcuts(true)
+    }
+
+    func cancelRecording() {
+        recording = nil
+        actions.pauseShortcuts(false)
+    }
+
+    /// Applies a recorded key press. Returns false when it is not a usable shortcut.
+    @discardableResult
+    func record(_ event: NSEvent) -> Bool {
+        guard let shortcut = recording, let binding = KeyBinding(event: event) else { return false }
+        recording = nil
+        actions.pauseShortcuts(false)
+        if actions.rebind(shortcut, binding) {
+            if shortcut == .showIsland { showIslandKey = binding } else { toggleDotKey = binding }
+        } else {
+            taken = shortcut
+        }
+        return true
     }
 
     let store: Store
@@ -189,6 +233,10 @@ private struct SettingsView: View {
             row("Hide status dot", isOn: Binding(get: { model.ui.dotHiddenByUser }, set: { model.ui.dotHiddenByUser = $0 }))
             divider
             row("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+            divider
+            shortcutRow("Show island", .showIsland, model.showIslandKey)
+            divider
+            shortcutRow("Toggle dot", .toggleDot, model.toggleDotKey)
         }
         .padding(.horizontal, 14).padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.06)))
@@ -220,6 +268,30 @@ private struct SettingsView: View {
             Toggle("", isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
         }
         .padding(.vertical, 8)
+    }
+
+    /// A shortcut and its recorder: click it, press the new keys.
+    private func shortcutRow(_ title: String, _ shortcut: SettingsModel.Shortcut, _ binding: KeyBinding) -> some View {
+        let recording = model.recording == shortcut
+        let label = recording ? "Press keys" : model.taken == shortcut ? "Taken" : binding.label
+        return HStack {
+            Text(title).font(.system(size: 13))
+            Spacer(minLength: 12)
+            Button {
+                recording ? model.cancelRecording() : model.startRecording(shortcut)
+            } label: {
+                Text(label)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(recording ? Color.accentColor : model.taken == shortcut ? .red : .primary)
+                    .contentTransition(.opacity)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .frame(minWidth: 70)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(recording ? .regular.tint(.accentColor.opacity(0.35)).interactive() : .regular.interactive(), in: .capsule)
+            .animation(Motion.snappy, value: label)
+        }
+        .padding(.vertical, 6)
     }
 
     private var divider: some View { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }

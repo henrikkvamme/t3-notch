@@ -15,9 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(store: store)
-        hotkey = Hotkey { [weak self] in self?.panel.toggle() }
-        // ⌥⇧Space hides or shows the status dot, e.g. while watching a film.
-        dotHotkey = Hotkey(modifiers: UInt32(optionKey | shiftKey), id: 2) { [weak self] in self?.toggleDot() }
+        hotkey = Hotkey(Settings.showIslandKey, id: 1) { [weak self] in self?.panel.toggle() }
+        // Hides or shows the status dot, e.g. while watching a film.
+        dotHotkey = Hotkey(Settings.toggleDotKey, id: 2) { [weak self] in self?.toggleDot() }
         store.onAttentionNeeded = { [weak self] reason in
             guard let self, self.panel.mode == .hidden else { return }
             // Already in T3 Code: it shows the reply and the request itself.
@@ -36,7 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reconnect: { [weak self] in self?.reconnect() },
             newToken: { [weak self] in self?.resetToken() },
             openLogs: { [weak self] in self?.openLogs() },
-            quit: { NSApp.terminate(nil) }))
+            quit: { NSApp.terminate(nil) },
+            rebind: { [weak self] shortcut, binding in self?.rebind(shortcut, to: binding) ?? false },
+            pauseShortcuts: { [weak self] paused in
+                for h in [self?.hotkey, self?.dotHotkey] { paused ? h?.suspend() : h?.resume() }
+            }))
         panel.onOpenSettings = { [weak self] in self?.settings.toggle() }
         // `--open-settings` shows the card at launch, for checking its design.
         if CommandLine.arguments.contains("--open-settings") {
@@ -81,6 +85,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleToolSteps() { Settings.showToolSteps.toggle() }
     @objc private func installUpdate() { updater.install() }
     @objc private func checkForUpdates() { Task { await updater.check() } }
+    /// Applies a new global shortcut and saves it; false if macOS or another app owns it.
+    private func rebind(_ shortcut: SettingsModel.Shortcut, to binding: KeyBinding) -> Bool {
+        switch shortcut {
+        case .showIsland:
+            guard hotkey.rebind(binding) else { return false }
+            Settings.showIslandKey = binding
+        case .toggleDot:
+            guard dotHotkey.rebind(binding) else { return false }
+            Settings.toggleDotKey = binding
+        }
+        return true
+    }
+
     @objc private func toggleDot() { panel.ui.dotHiddenByUser.toggle() }
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp

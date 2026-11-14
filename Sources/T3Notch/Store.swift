@@ -698,6 +698,26 @@ final class Store {
 
 /// User settings, kept in UserDefaults.
 enum Settings {
+    /// Global shortcut that shows or hides the island. ⌥Space by default.
+    static var showIslandKey: KeyBinding {
+        get { binding("showIslandKey") ?? .showIsland }
+        set { setBinding(newValue, "showIslandKey") }
+    }
+
+    /// Global shortcut that hides or shows the status dot. ⌥⇧Space by default.
+    static var toggleDotKey: KeyBinding {
+        get { binding("toggleDotKey") ?? .toggleDot }
+        set { setBinding(newValue, "toggleDotKey") }
+    }
+
+    private static func binding(_ key: String) -> KeyBinding? {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) }
+    }
+
+    private static func setBinding(_ b: KeyBinding, _ key: String) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(b), forKey: key)
+    }
+
     /// While the agent works, also show its commands and tool steps, not only its thinking.
     /// Off by default: commands can be long.
     static var showToolSteps: Bool {

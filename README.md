@@ -123,7 +123,7 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 
 | Key | Action |
 | --- | --- |
-| ⌥Space | Show or hide the island |
+| ⌥Space | Show or hide the island (rebind in settings) |
 | ⏎ | Send, or queue after the running turn. Accepts a pending approval when the input is empty |
 | ⌘⏎ | Steer the running turn. Accepts an approval for the session when one is showing |
 | ⎋ | Decline a pending approval, otherwise close |
@@ -133,7 +133,7 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | ⌘. | Stop the running agent |
 | ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list, or scroll the reply |
 | ⌘Z / ⌃Z | Bring back a removed clip |
-| ⌥⇧Space | Hide or show the status dot, from any app |
+| ⌥⇧Space | Hide or show the status dot, from any app (rebind in settings) |
 | ⌘, | Open settings (also: right-click the status dot) |
 
 ### Clipping
@@ -174,6 +174,7 @@ Right-click (or ⌃-click) the status dot, or press ⌘, in the island. Esc or a
   steps while it works.
 - **Hide status dot** (⌥⇧Space).
 - **Launch at login**.
+- **Show island** and **Toggle dot**: click the shortcut, then press new keys to rebind it (⎋ cancels).
 - **Check for updates**, **Reconnect**, **New token**, **Logs** and **Quit**.
 
 ## How it works
