@@ -127,7 +127,7 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | ⏎ | Send, or queue after the running turn. Accepts a pending approval when the input is empty |
 | ⌘⏎ | Steer the running turn. Accepts an approval for the session when one is showing |
 | ⎋ | Decline a pending approval, otherwise close |
-| ⌘K | Pick the chat |
+| ⌘K | Pick the chat (rebind in settings) |
 | ⌘P | Clip part of the screen into the next message |
 | ⌘O | Open the chat in T3, taking the draft and clips along |
 | ⌘. | Stop the running agent |
@@ -175,7 +175,7 @@ Right-click (or ⌃-click) the status dot, or press ⌘, in the island. Esc or a
   steps while it works.
 - **Hide status dot** (⌥⇧Space).
 - **Launch at login**.
-- **Show island** and **Toggle dot**: click the shortcut, then press new keys to rebind it (⎋ cancels).
+- **Show island**, **Toggle dot** and **Show chats**: click the shortcut, then press new keys to rebind it (⎋ cancels).
 - **Reconnect**, **New token** and **Logs**; the circular arrows check for updates (green with the new version when one is out: click to install); the power button quits.
 
 ## How it works

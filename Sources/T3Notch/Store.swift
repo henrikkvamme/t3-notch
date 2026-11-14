@@ -709,6 +709,12 @@ enum Settings {
         set { setBinding(newValue, "toggleDotKey") }
     }
 
+    /// The island's shortcut for the chat list. ⌘K by default.
+    static var showChatsKey: KeyBinding {
+        get { binding("showChatsKey") ?? .showChats }
+        set { setBinding(newValue, "showChatsKey") }
+    }
+
     private static func binding(_ key: String) -> KeyBinding? {
         UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) }
     }

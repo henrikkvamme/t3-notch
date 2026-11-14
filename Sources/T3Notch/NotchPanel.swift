@@ -342,13 +342,15 @@ final class PanelController {
         let ctrl = event.modifierFlags.contains(.control)
         let shift = event.modifierFlags.contains(.shift)
         let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
+        // The chat list's shortcut is rebindable (⌘K by default).
+        if Settings.showChatsKey.matches(event) {
+            setPicker(!ui.pickerOpen); return true
+        }
         switch event.keyCode {
         case 53: // Esc
             if ui.pickerOpen { setPicker(false); return true }
             if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
-        case 40 where cmd: // ⌘K
-            setPicker(!ui.pickerOpen); return true
         case 31 where cmd: // ⌘O opens the thread in T3 and hides the island
             openInT3(); return true
         case 6 where (cmd || ctrl) && !shift: // ⌘Z / ⌃Z: restore a removed clip, else normal undo

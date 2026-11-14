@@ -94,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .toggleDot:
             guard dotHotkey.rebind(binding) else { return false }
             Settings.toggleDotKey = binding
+        case .showChats:
+            // Only inside the island: just not one of its other shortcuts.
+            guard !KeyBinding.islandReserved.contains(where: { $0.sameKeys(as: binding) }) else { return false }
+            Settings.showChatsKey = binding
         }
         return true
     }

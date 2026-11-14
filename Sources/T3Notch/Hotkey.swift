@@ -11,6 +11,23 @@ struct KeyBinding: Codable, Equatable, Sendable {
 
     static let showIsland = KeyBinding(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey), key: "Space")
     static let toggleDot = KeyBinding(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey | shiftKey), key: "Space")
+    static let showChats = KeyBinding(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(cmdKey), key: "K")
+
+    /// The island's own fixed shortcuts, which "Show chats" may not take.
+    static let islandReserved: [KeyBinding] = [
+        (kVK_Escape, 0), (kVK_Return, 0), (kVK_Return, cmdKey), (kVK_ANSI_P, cmdKey), (kVK_ANSI_O, cmdKey),
+        (kVK_ANSI_Period, cmdKey), (kVK_ANSI_Comma, cmdKey), (kVK_ANSI_Z, cmdKey), (kVK_ANSI_Z, controlKey),
+        (kVK_ANSI_J, controlKey), (kVK_ANSI_K, controlKey), (kVK_ANSI_N, controlKey), (kVK_ANSI_P, controlKey),
+        (kVK_ANSI_X, cmdKey), (kVK_ANSI_C, cmdKey), (kVK_ANSI_V, cmdKey), (kVK_ANSI_A, cmdKey), (kVK_ANSI_W, cmdKey),
+    ].map { KeyBinding(keyCode: UInt32($0.0), modifiers: UInt32($0.1), key: "") }
+
+    /// Whether a key press is this combination (exact modifiers).
+    func matches(_ event: NSEvent) -> Bool {
+        guard let pressed = KeyBinding(event: event) else { return false }
+        return pressed.keyCode == keyCode && pressed.modifiers == modifiers
+    }
+
+    func sameKeys(as other: KeyBinding) -> Bool { keyCode == other.keyCode && modifiers == other.modifiers }
 
     /// ⌃⌥⇧⌘ order, as macOS shows shortcuts.
     var label: String {
