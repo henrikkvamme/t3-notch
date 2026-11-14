@@ -368,6 +368,7 @@ struct OverlayView: View {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         Task { await store.send(text, images: images) }
+        ui.onClose?() // sent: tuck the island away and hand focus back
     }
 
     private func submitAnswers(_ questions: [JSON]) {
