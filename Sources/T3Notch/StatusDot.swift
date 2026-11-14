@@ -15,13 +15,15 @@ final class StatusDotController {
     /// Clickable area: from the notch's edge, the full menu-bar height, 44pt wide.
     private static let width: CGFloat = 44
 
-    init(store: Store, ui: OverlayUIState, onClick: @escaping () -> Void) {
+    init(store: Store, ui: OverlayUIState, onClick: @escaping () -> Void, onRightClick: @escaping () -> Void) {
         self.store = store
         self.ui = ui
         panel = NotchPanel()
         panel.allowsKey = false
         panel.level = .statusBar + 1
-        panel.contentView = FirstClickHostingView(rootView: StatusDotView(store: store, ui: ui, onClick: onClick))
+        let host = FirstClickHostingView(rootView: StatusDotView(store: store, ui: ui, onClick: onClick))
+        host.onRightClick = onRightClick // right-click (or ⌃-click) opens settings
+        panel.contentView = host
         place()
         panel.orderFrontRegardless()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -115,7 +117,17 @@ final class StatusDotController {
 /// Takes the first click even though the app is never active; otherwise macOS spends
 /// that click activating the window and the tap never fires.
 final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    var onRightClick: (() -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if let onRightClick { onRightClick() } else { super.rightMouseDown(with: event) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control), let onRightClick { onRightClick() } else { super.mouseDown(with: event) }
+    }
 }
 
 private struct StatusDotView: View {

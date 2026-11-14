@@ -9,7 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var hotkey: Hotkey!
     private var dotHotkey: Hotkey!
-    private var statusItem: NSStatusItem!
+    private var settings: SettingsController!
     private var statusDot: StatusDotController!
     private var demo: DemoController?
 
@@ -26,11 +26,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Finished replies fade; requests that block the agent stay until handled.
             self.panel.peek(autoHide: reason == .finished)
         }
-        statusDot = StatusDotController(store: store, ui: panel.ui) { [weak self] in self?.panel.expand() }
+        statusDot = StatusDotController(store: store, ui: panel.ui,
+                                        onClick: { [weak self] in self?.panel.expand() },
+                                        onRightClick: { [weak self] in self?.settings.toggle() })
         store.start()
         panel.ui.updater = updater
         updater.start()
-        setUpStatusItem()
+        settings = SettingsController(store: store, updater: updater, ui: panel.ui, actions: .init(
+            reconnect: { [weak self] in self?.reconnect() },
+            newToken: { [weak self] in self?.resetToken() },
+            openLogs: { [weak self] in self?.openLogs() },
+            quit: { NSApp.terminate(nil) }))
+        panel.onOpenSettings = { [weak self] in self?.settings.toggle() }
+        // `--open-settings` shows the card at launch, for checking its design.
+        if CommandLine.arguments.contains("--open-settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.settings.open() }
+        }
         if Store.demo {
             demo = DemoController(panel: panel, store: store)
             demo?.run()
@@ -58,14 +69,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
     }
 
-    private func setUpStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "rectangle.topthird.inset.filled", accessibilityDescription: "T3 Notch")
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
-    }
-
     @objc private func togglePanel() { panel.toggle() }
     @objc private func openT3() { store.openTargetInT3() }
     @objc private func reconnect() { store.reconnectNow() }
@@ -90,52 +93,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quit() { NSApp.terminate(nil) }
 }
 
-extension AppDelegate: NSMenuDelegate {
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let status: String
-        switch store.connection {
-        case .connected: status = "Connected to T3 \(store.runtime?.serverVersion ?? "")"
-        case .connecting: status = "Connecting…"
-        case .t3NotRunning: status = "T3 isn't running"
-        case .failed(let r): status = "Error: \(r.prefix(60))"
-        }
-        menu.addItem(withTitle: status, action: nil, keyEquivalent: "").isEnabled = false
-        if let t = store.targetThread?["title"].string {
-            menu.addItem(withTitle: "Target: \(t.prefix(50))", action: nil, keyEquivalent: "").isEnabled = false
-        }
-        menu.addItem(.separator())
-        add(menu, "Show/Hide  (⌥Space)", #selector(togglePanel))
-        add(menu, "Open Thread in T3", #selector(openT3))
-        add(menu, "Reconnect", #selector(reconnect))
-        add(menu, "Reissue Token", #selector(resetToken))
-        add(menu, "Open Logs Folder", #selector(openLogs))
-        if let version = updater.availableVersion {
-            add(menu, "Update to v\(version)", #selector(installUpdate))
-        } else {
-            add(menu, "Check for Updates (v\(Updater.currentVersion))", #selector(checkForUpdates))
-        }
-        let dot = add(menu, "Hide Status Dot", #selector(toggleDot))
-        dot.state = panel.ui.dotHiddenByUser ? .on : .off
-        dot.keyEquivalent = " "
-        dot.keyEquivalentModifierMask = [.option, .shift]
-        let steps = add(menu, "Show Commands While Working", #selector(toggleToolSteps))
-        steps.state = Settings.showToolSteps ? .on : .off
-        let finish = add(menu, "Show When Chat Finishes", #selector(toggleShowWhenFinished))
-        finish.state = Settings.showWhenChatFinishes ? .on : .off
-        let login = add(menu, "Launch at Login", #selector(toggleLogin))
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        menu.addItem(.separator())
-        add(menu, "Quit T3 Notch", #selector(quit))
-    }
-
-    @discardableResult
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector) -> NSMenuItem {
-        let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
-        item.target = self
-        return item
-    }
-}
 
 if let i = CommandLine.arguments.firstIndex(of: "--render-dots"), CommandLine.arguments.count > i + 1 {
     MainActor.assumeIsolated { DotPreview.render(to: CommandLine.arguments[i + 1]) }

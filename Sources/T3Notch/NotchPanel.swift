@@ -159,6 +159,8 @@ final class PanelController {
 
     /// The app that had keyboard focus before the island took it.
     private var previousApp: NSRunningApplication?
+    /// Set by the app delegate: opens the settings card.
+    var onOpenSettings: (() -> Void)?
 
     private func rememberFrontApp() {
         let front = NSWorkspace.shared.frontmostApplication
@@ -352,6 +354,8 @@ final class PanelController {
             var restored = false
             withAnimation(Motion.content) { restored = ui.undoClipRemoval() }
             return restored
+        case 43 where cmd: // ⌘, opens settings
+            onOpenSettings?(); return true
         case 35 where cmd: // ⌘P enters clipping mode
             startClipping(); return true
         case 47 where cmd: // ⌘.

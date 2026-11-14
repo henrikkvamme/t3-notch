@@ -1,0 +1,248 @@
+import AppKit
+import ServiceManagement
+import SwiftUI
+
+/// The settings popover: a glass card that springs out below the status dot. Opened by
+/// right-clicking the dot or ⌘, in the island; Esc or clicking elsewhere closes it.
+@MainActor
+final class SettingsController {
+    private let panel = NotchPanel()
+    private let model: SettingsModel
+    private var resignObserver: Any?
+    private var keyMonitor: Any?
+    private var closeTask: Task<Void, Never>?
+    private static let size = CGSize(width: 340, height: 420)
+
+    init(store: Store, updater: Updater, ui: OverlayUIState, actions: SettingsModel.Actions) {
+        model = SettingsModel(store: store, updater: updater, ui: ui, actions: actions)
+        panel.level = .statusBar + 2 // over the island and the dot
+        panel.contentView = FirstClickHostingView(rootView: SettingsView(model: model))
+        resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel,
+                                                                queue: .main) { [weak self] _ in
+            // `--open-settings` (a design check) keeps it open; normally losing focus closes it.
+            MainActor.assumeIsolated { if !CommandLine.arguments.contains("--open-settings") { self?.close() } }
+        }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self, self.panel.isKeyWindow else { return e }
+            let cmd = e.modifierFlags.contains(.command)
+            if e.keyCode == 53 || (cmd && e.keyCode == 43) || (cmd && e.keyCode == 13) { // Esc, ⌘, or ⌘W
+                MainActor.assumeIsolated { self.close() }
+                return nil
+            }
+            return e
+        }
+    }
+
+    var isOpen: Bool { model.shown }
+
+    func toggle() { isOpen ? close() : open() }
+
+    func open() {
+        closeTask?.cancel()
+        model.refresh()
+        place()
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        withAnimation(Motion.open) { model.shown = true }
+    }
+
+    func close() {
+        guard model.shown else { return }
+        withAnimation(Motion.close) { model.shown = false }
+        closeTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(320))
+            guard let self, !Task.isCancelled, !self.model.shown else { return }
+            self.panel.orderOut(nil)
+        }
+    }
+
+    /// Top right, just below the status dot beside the notch.
+    private func place() {
+        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
+        let notch = NotchGeometry.forScreen(screen).notchRect
+        let s = Self.size
+        let x = min(notch.maxX + 44 - s.width + 24, screen.frame.maxX - s.width - 8)
+        panel.setFrame(NSRect(x: x, y: notch.minY - s.height - 6, width: s.width, height: s.height), display: false)
+    }
+}
+
+/// What the settings card shows and changes. Toggles write the same UserDefaults keys the
+/// rest of the app reads.
+@Observable
+@MainActor
+final class SettingsModel {
+    struct Actions {
+        var reconnect: () -> Void
+        var newToken: () -> Void
+        var openLogs: () -> Void
+        var quit: () -> Void
+    }
+
+    let store: Store
+    let updater: Updater
+    let ui: OverlayUIState
+    let actions: Actions
+    var shown = false
+    var showWhenChatFinishes = Settings.showWhenChatFinishes {
+        didSet { Settings.showWhenChatFinishes = showWhenChatFinishes }
+    }
+    var showToolSteps = Settings.showToolSteps {
+        didSet { Settings.showToolSteps = showToolSteps }
+    }
+    var launchAtLogin = SMAppService.mainApp.status == .enabled
+    var checking = false
+    var upToDate = false
+
+    init(store: Store, updater: Updater, ui: OverlayUIState, actions: Actions) {
+        self.store = store
+        self.updater = updater
+        self.ui = ui
+        self.actions = actions
+    }
+
+    func refresh() {
+        showWhenChatFinishes = Settings.showWhenChatFinishes
+        showToolSteps = Settings.showToolSteps
+        launchAtLogin = SMAppService.mainApp.status == .enabled
+        upToDate = false
+    }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if on { try service.register() } else { try service.unregister() }
+        } catch {}
+        launchAtLogin = service.status == .enabled
+    }
+
+    func checkForUpdates() {
+        checking = true
+        Task {
+            await updater.check()
+            checking = false
+            upToDate = updater.availableVersion == nil
+        }
+    }
+}
+
+private struct SettingsView: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            update
+            switches
+            buttons
+        }
+        .padding(16)
+        .frame(width: 340, alignment: .topLeading)
+        // Tinted dark so text behind the card does not bleed through.
+        .glassEffect(.regular.tint(.black.opacity(0.55)), in: .rect(cornerRadius: 26))
+        .environment(\.colorScheme, .dark)
+        // Springs out from the dot, top right.
+        .scaleEffect(model.shown ? 1 : 0.6, anchor: .topTrailing)
+        .opacity(model.shown ? 1 : 0)
+        .blur(radius: model.shown ? 0 : 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 40, height: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("T3 Notch").font(.system(size: 15, weight: .semibold))
+                Text("v\(Updater.currentVersion)").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            HStack(spacing: 6) {
+                Circle().fill(connectionColor).frame(width: 7, height: 7)
+                Text(connectionText).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder private var update: some View {
+        if let version = model.updater.availableVersion {
+            Button { model.updater.install() } label: {
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill")
+                    Text("Update to v\(version)").fontWeight(.semibold)
+                    Spacer()
+                    if case .installing = model.updater.state { ProgressView().controlSize(.small) }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .foregroundStyle(.white)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(red: 0.16, green: 0.78, blue: 0.38)))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var switches: some View {
+        VStack(spacing: 0) {
+            row("Show when chat finishes", isOn: $model.showWhenChatFinishes)
+            divider
+            row("Show commands while working", isOn: $model.showToolSteps)
+            divider
+            row("Hide status dot", isOn: Binding(get: { model.ui.dotHiddenByUser }, set: { model.ui.dotHiddenByUser = $0 }))
+            divider
+            row("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) }))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.06)))
+    }
+
+    private var buttons: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                pill(model.checking ? "Checking…" : model.upToDate ? "Up to date" : "Check for updates") {
+                    model.checkForUpdates()
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 8) {
+                pill("Reconnect") { model.actions.reconnect() }
+                pill("New token") { model.actions.newToken() }
+                pill("Logs") { model.actions.openLogs() }
+                Spacer(minLength: 0)
+                pill("Quit") { model.actions.quit() }
+            }
+        }
+    }
+
+    /// Label left, switch right.
+    private func row(_ title: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            Text(title).font(.system(size: 13))
+            Spacer(minLength: 12)
+            Toggle("", isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var divider: some View { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
+
+    private func pill(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 12).padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    private var connectionText: String {
+        switch model.store.connection {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting"
+        case .t3NotRunning: return "T3 not running"
+        case .failed: return "Can't reach T3"
+        }
+    }
+
+    private var connectionColor: Color {
+        model.store.connection == .connected ? .green : .gray
+    }
+}

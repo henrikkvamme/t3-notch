@@ -19,7 +19,7 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 - **Prompt from anywhere.** ⌥Space opens the island over any app, fullscreen ones included. The input appears
   when you start typing. Sending hides the island and hands focus back to the app you were in.
 - **Live replies.** While the agent works, the island shows its thinking (and, with **Show Commands While
-  Working** on in the menu, its current step: `$ swift test`, `Editing Store.swift`). Then the reply streams in, sliding the old one out as it blurs in.
+  Working** on in settings, its current step: `$ swift test`, `Editing Store.swift`). Then the reply streams in, sliding the old one out as it blurs in.
   Images in the exchange show as thumbnails; hover one to see it larger.
 - **Queue or steer.** ⏎ queues your message after the running turn; ⌘⏎ steers the turn that is running.
 - **Pick the chat.** ⌘K opens a list that mirrors T3's sidebar: pinned, then active, then the rest, with
@@ -71,10 +71,10 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 
 Download `T3-Notch-<version>.zip` from the [latest release](https://github.com/lille-morille/t3-notch/releases/latest),
 unzip it, and move **T3 Notch.app** to Applications. It is signed and notarized, so it opens without warnings.
-Then turn on **Launch at Login** in the menu bar icon's menu.
+Then turn on **Launch at login** in settings (right-click the status dot).
 
 **Updates.** T3 Notch checks for new releases. When one is out, a green ↓ button appears in the island, left of
-the – button (and **Update to v…** in the menu). One click downloads it, checks that it is notarized and from
+the – button (and in settings). One click downloads it, checks that it is notarized and from
 the same developer, replaces the app and relaunches.
 
 ### With an agent
@@ -90,10 +90,12 @@ Install T3 Notch, a macOS notch overlay for T3 Code, from https://github.com/lil
 2. Download the .zip asset of the latest release
    (https://api.github.com/repos/lille-morille/t3-notch/releases/latest lists it), unzip it with
    `ditto -x -k`, move "T3 Notch.app" to /Applications (or ~/Applications), and open it.
-3. Confirm it runs (`pgrep -x T3Notch`) and that the menu bar icon's menu says "Connected to T3".
+3. Confirm it runs (`pgrep -x T3Notch`); right-clicking the status dot beside the notch opens
+   settings, which should say "Connected".
 4. Tell me how to use it: ⌥Space opens the island; ⌘K picks the chat; ⌘P clips the screen and asks
    once for Screen Recording and Accessibility (the island shows a button that opens the right
-   System Settings page); "Launch at Login" is in the menu bar icon's menu; updates show as a
+   System Settings page); right-click the dot (or ⌘, in the island) for settings, including
+   "Launch at login"; updates show as a
    green button in the island.
 
 If there is no release yet, build from source instead: clone the repo to ~/code/t3-notch and run
@@ -132,6 +134,7 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list, or scroll the reply |
 | ⌘Z / ⌃Z | Bring back a removed clip |
 | ⌥⇧Space | Hide or show the status dot, from any app |
+| ⌘, | Open settings (also: right-click the status dot) |
 
 ### Clipping
 
@@ -158,17 +161,20 @@ list, so only the toggle is left.
 | Red ✕ | The last run failed |
 | Blue ✓ | A reply you haven't opened yet |
 
-Click the dot to open the island. It hides while an app is fullscreen, and ⌥⇧Space (or **Hide Status Dot** in
-the menu) hides it until you show it again.
+Click the dot to open the island. It hides while an app is fullscreen, and ⌥⇧Space (or **Hide status dot** in
+settings) hides it until you show it again.
 
-### Menu bar icon
+### Settings
 
-- **Show When Chat Finishes** (on by default) pops the island open with the reply when the chat's run ends,
+Right-click (or ⌃-click) the status dot, or press ⌘, in the island. Esc or a click elsewhere closes it.
+
+- **Show when chat finishes** (on by default) pops the island open with the reply when the chat's run ends,
   unless you are already in T3 Code. Clicking the popped-up island opens it fully.
-- **Hide Status Dot** (⌥⇧Space).
-- **Show Commands While Working** (off by default): besides the thinking, show the agent's commands and tool
+- **Show commands while working** (off by default): besides the thinking, show the agent's commands and tool
   steps while it works.
-- **Launch at Login**, **Reconnect**, **Reissue Token**, and **Open Logs Folder**.
+- **Hide status dot** (⌥⇧Space).
+- **Launch at login**.
+- **Check for updates**, **Reconnect**, **New token**, **Logs** and **Quit**.
 
 ## How it works
 
