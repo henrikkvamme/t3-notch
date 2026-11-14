@@ -11,7 +11,7 @@ final class SettingsController {
     private var resignObserver: Any?
     private var keyMonitor: Any?
     private var closeTask: Task<Void, Never>?
-    private static let size = CGSize(width: 340, height: 560)
+    private static let size = CGSize(width: 340, height: 520)
 
     init(store: Store, updater: Updater, ui: OverlayUIState, actions: SettingsModel.Actions) {
         model = SettingsModel(store: store, updater: updater, ui: ui, actions: actions)
@@ -169,6 +169,10 @@ final class SettingsModel {
             await updater.check()
             checking = false
             upToDate = updater.availableVersion == nil
+            if upToDate {
+                try? await Task.sleep(for: .seconds(2.5))
+                withAnimation(Motion.snappy) { upToDate = false }
+            }
         }
     }
 }
@@ -179,7 +183,6 @@ private struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            update
             switches
             buttons
         }
@@ -210,24 +213,6 @@ private struct SettingsView: View {
         }
     }
 
-    @ViewBuilder private var update: some View {
-        if let version = model.updater.availableVersion {
-            Button { model.updater.install() } label: {
-                HStack {
-                    Image(systemName: "arrow.down.circle.fill")
-                    Text("Update to v\(version)").fontWeight(.semibold)
-                    Spacer()
-                    if case .installing = model.updater.state { ProgressView().controlSize(.small) }
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .foregroundStyle(.white)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(red: 0.16, green: 0.78, blue: 0.38)))
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
     private var switches: some View {
         VStack(spacing: 0) {
             row("Expand on notch hover", isOn: $model.expandOnHover)
@@ -249,21 +234,61 @@ private struct SettingsView: View {
     }
 
     private var buttons: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                pill(model.checking ? "Checking…" : model.upToDate ? "Up to date" : "Check for updates") {
-                    model.checkForUpdates()
-                }
-                Spacer(minLength: 0)
-            }
-            HStack(spacing: 8) {
-                pill("Reconnect") { model.actions.reconnect() }
-                pill("New token") { model.actions.newToken() }
-                pill("Logs") { model.actions.openLogs() }
-                Spacer(minLength: 0)
-                pill("Quit") { model.actions.quit() }
-            }
+        HStack(spacing: 8) {
+            pill("Reconnect") { model.actions.reconnect() }
+            pill("New token") { model.actions.newToken() }
+            pill("Logs") { model.actions.openLogs() }
+            Spacer(minLength: 0)
+            updateButton
+            iconButton("power") { model.actions.quit() }
         }
+    }
+
+    /// Circular arrows: click to check for updates (they spin while checking, a check mark
+    /// shows when current). With an update out, it turns green with an up arrow and the new
+    /// version, and a click installs it.
+    @ViewBuilder private var updateButton: some View {
+        let green = Color(red: 0.16, green: 0.78, blue: 0.38)
+        if let version = model.updater.availableVersion {
+            let installing: Bool = { if case .installing = model.updater.state { return true }; return false }()
+            Button { model.updater.install() } label: {
+                HStack(spacing: 5) {
+                    if installing {
+                        ProgressView().controlSize(.mini).tint(.white)
+                    } else {
+                        Image(systemName: "arrow.up").font(.system(size: 11, weight: .heavy))
+                    }
+                    Text("v\(version)").font(.system(size: 12, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10).frame(height: 30)
+                .background(Capsule().fill(green))
+                .shadow(color: green.opacity(0.6), radius: 6)
+            }
+            .buttonStyle(.plain)
+            .disabled(installing)
+            .transition(.blurReplace.combined(with: .scale(0.8)))
+        } else {
+            Button { model.checkForUpdates() } label: {
+                Image(systemName: model.upToDate ? "checkmark" : "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.rotate, options: .repeating, isActive: model.checking)
+                    .foregroundStyle(model.upToDate ? green : .primary)
+                    .frame(width: 30, height: 30)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .disabled(model.checking)
+        }
+    }
+
+    private func iconButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold)).frame(width: 30, height: 30)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
     }
 
     /// Label left, switch right.
@@ -305,7 +330,8 @@ private struct SettingsView: View {
     private func pill(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title).font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 12).padding(.vertical, 7)
+                .lineLimit(1).fixedSize()
+                .padding(.horizontal, 11).padding(.vertical, 7)
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .capsule)

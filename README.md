@@ -176,7 +176,7 @@ Right-click (or ⌃-click) the status dot, or press ⌘, in the island. Esc or a
 - **Hide status dot** (⌥⇧Space).
 - **Launch at login**.
 - **Show island** and **Toggle dot**: click the shortcut, then press new keys to rebind it (⎋ cancels).
-- **Check for updates**, **Reconnect**, **New token**, **Logs** and **Quit**.
+- **Reconnect**, **New token** and **Logs**; the circular arrows check for updates (green with the new version when one is out: click to install); the power button quits.
 
 ## How it works
 
