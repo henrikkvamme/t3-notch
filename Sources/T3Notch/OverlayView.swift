@@ -54,6 +54,8 @@ final class OverlayUIState {
     var replyTextHeight: CGFloat = 0
 
     var onClose: (() -> Void)?
+    /// Set at launch; shows the update button when a newer release exists.
+    var updater: Updater?
     var onOpenInT3: (() -> Void)?
     var onRequestFocus: (() -> Void)?
     /// Typing started or stopped; the controller shows or hides the text cursor.
@@ -150,6 +152,10 @@ struct OverlayView: View {
                         }
                     }
                 }
+                if case .failed(let message) = ui.updater?.state {
+                    Text(message).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
+                        .transition(.blurReplace)
+                }
                 if let err = store.lastSendError {
                     Text(err).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
                         .transition(.blurReplace)
@@ -201,6 +207,9 @@ struct OverlayView: View {
             GlassEffectContainer(spacing: 0) {
                 // Negative spacing keeps the circles 6pt apart while their larger hit areas touch.
                 HStack(spacing: -6) {
+                    if let updater = ui.updater, updater.availableVersion != nil {
+                        updateButton(updater).transition(.blurReplace.combined(with: .scale(0.6)))
+                    }
                     headerButton("minus") { ui.onClose?() }
                     headerButton("arrow.up.forward") { ui.onOpenInT3?() }
                 }
@@ -495,6 +504,28 @@ struct OverlayView: View {
                 .font(.system(size: 13))
                 .textSelection(.enabled)
         }
+    }
+
+    /// A solid green circle, so it stands out from the grey controls: a newer release is out.
+    /// One click installs it and relaunches; a spinner shows while it installs.
+    private func updateButton(_ updater: Updater) -> some View {
+        let installing: Bool = { if case .installing = updater.state { return true }; return false }()
+        return Button { updater.install() } label: {
+            ZStack {
+                Circle().fill(Color(red: 0.16, green: 0.78, blue: 0.38))
+                if installing {
+                    ProgressView().controlSize(.mini).tint(.white)
+                } else {
+                    Image(systemName: "arrow.down").font(.system(size: 11, weight: .heavy)).foregroundStyle(.white)
+                }
+            }
+            .frame(width: 22, height: 22)
+            .shadow(color: Color(red: 0.16, green: 0.78, blue: 0.38).opacity(0.6), radius: 6)
+            .padding(6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(installing)
     }
 
     /// A 22pt glass circle inside a 34pt hit area.

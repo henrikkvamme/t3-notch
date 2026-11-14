@@ -5,6 +5,7 @@ import ServiceManagement
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = Store()
+    private let updater = Updater()
     private var panel: PanelController!
     private var hotkey: Hotkey!
     private var dotHotkey: Hotkey!
@@ -27,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusDot = StatusDotController(store: store, ui: panel.ui) { [weak self] in self?.panel.expand() }
         store.start()
+        panel.ui.updater = updater
+        updater.start()
         setUpStatusItem()
         if Store.demo {
             demo = DemoController(panel: panel, store: store)
@@ -73,6 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func toggleShowWhenFinished() { Settings.showWhenChatFinishes.toggle() }
     @objc private func toggleToolSteps() { Settings.showToolSteps.toggle() }
+    @objc private func installUpdate() { updater.install() }
+    @objc private func checkForUpdates() { Task { await updater.check() } }
     @objc private func toggleDot() { panel.ui.dotHiddenByUser.toggle() }
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
@@ -105,6 +110,11 @@ extension AppDelegate: NSMenuDelegate {
         add(menu, "Reconnect", #selector(reconnect))
         add(menu, "Reissue Token", #selector(resetToken))
         add(menu, "Open Logs Folder", #selector(openLogs))
+        if let version = updater.availableVersion {
+            add(menu, "Update to v\(version)", #selector(installUpdate))
+        } else {
+            add(menu, "Check for Updates (v\(Updater.currentVersion))", #selector(checkForUpdates))
+        }
         let dot = add(menu, "Hide Status Dot", #selector(toggleDot))
         dot.state = panel.ui.dotHiddenByUser ? .on : .off
         dot.keyEquivalent = " "

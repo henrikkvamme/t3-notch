@@ -61,12 +61,19 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 
 ## Requirements
 
-- macOS 26 or later, on any Mac. A notch is optional: without one, the island grows from a drawn notch at the
-  top of the screen.
-- Xcode 26 or its command line tools (Swift 6.2), to build.
+- macOS 26 or later, on an Apple silicon or Intel Mac. A notch is optional: without one, the island grows from a
+  drawn notch at the top of the screen.
 - The [T3 Code](https://github.com/pingdotgg/t3code) desktop app, running on the same Mac.
 
 ## Install
+
+Download `T3-Notch-<version>.zip` from the [latest release](https://github.com/lille-morille/t3-notch/releases/latest),
+unzip it, and move **T3 Notch.app** to Applications. It is signed and notarized, so it opens without warnings.
+Then turn on **Launch at Login** in the menu bar icon's menu.
+
+**Updates.** T3 Notch checks for new releases. When one is out, a green ↓ button appears in the island, left of
+the – button (and **Update to v…** in the menu). One click downloads it, checks that it is notarized and from
+the same developer, replaces the app and relaunches.
 
 ### With an agent
 
@@ -75,22 +82,26 @@ Paste this into Claude Code, Codex, T3 Code or another coding agent on the Mac y
 ```text
 Install T3 Notch, a macOS notch overlay for T3 Code, from https://github.com/lille-morille/t3-notch.
 
-1. Check the requirements: macOS 26 or later (`sw_vers -productVersion`), Swift 6.2 or later
-   (`swift --version`; if it is missing, ask me to install Xcode 26 or run `xcode-select --install`),
-   and the T3 Code desktop app installed and running (`~/.t3/userdata/server-runtime.json` exists).
-   Stop and tell me if any is missing.
-2. Clone the repo to ~/code/t3-notch, or `git pull` if it is already there.
-3. In that folder run `make install`. It builds a release, signs it, copies "T3 Notch.app" to
-   ~/Applications and starts it. If macOS asks to let codesign use a key, tell me to choose Always Allow.
-4. Confirm it runs (`pgrep -x T3Notch`) and that the menu bar icon's menu says "Connected to T3".
-5. Tell me how to use it: ⌥Space opens the island; ⌘K picks the chat; ⌘P clips the screen and asks
+1. Check the requirements: macOS 26 or later (`sw_vers -productVersion`) and the T3 Code desktop
+   app installed and running (`~/.t3/userdata/server-runtime.json` exists). Stop and tell me if
+   either is missing.
+2. Download the .zip asset of the latest release
+   (https://api.github.com/repos/lille-morille/t3-notch/releases/latest lists it), unzip it with
+   `ditto -x -k`, move "T3 Notch.app" to /Applications (or ~/Applications), and open it.
+3. Confirm it runs (`pgrep -x T3Notch`) and that the menu bar icon's menu says "Connected to T3".
+4. Tell me how to use it: ⌥Space opens the island; ⌘K picks the chat; ⌘P clips the screen and asks
    once for Screen Recording and Accessibility (the island shows a button that opens the right
-   System Settings page); "Launch at Login" is in the menu bar icon's menu.
+   System Settings page); "Launch at Login" is in the menu bar icon's menu; updates show as a
+   green button in the island.
 
-Do not change the code. If the build fails, show me the error.
+If there is no release yet, build from source instead: clone the repo to ~/code/t3-notch and run
+`make install` there (needs Xcode 26 / Swift 6.2). Do not change the code; if anything fails, show
+me the error.
 ```
 
-### By hand
+### From source
+
+Needs Xcode 26 or its command line tools (Swift 6.2).
 
 ```sh
 git clone https://github.com/lille-morille/t3-notch.git ~/code/t3-notch
@@ -98,11 +109,11 @@ cd ~/code/t3-notch
 make install   # builds, signs, copies to ~/Applications and starts it
 ```
 
-Then open the menu bar icon's menu and turn on **Launch at Login**.
-
 **Signing.** `make app` signs with the first *Apple Development* certificate in your keychain, so macOS keeps
 the Screen Recording and Accessibility permissions across rebuilds. Without one it signs ad hoc, which works,
 but each rebuild asks for those permissions again. Choose an identity with `make SIGN_ID=<hash> install`.
+
+Releases are built by CI; see [RELEASING.md](RELEASING.md).
 
 ## Keys
 
