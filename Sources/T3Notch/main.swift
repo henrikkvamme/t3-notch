@@ -96,10 +96,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Settings.toggleDotKey = binding
         case .showChats:
             // Only inside the island: just not one of its other shortcuts.
-            guard !KeyBinding.islandReserved.contains(where: { $0.sameKeys(as: binding) }) else { return false }
+            guard islandKeyFree(binding, besides: Settings.openInT3Key) else { return false }
             Settings.showChatsKey = binding
+        case .openInT3:
+            guard islandKeyFree(binding, besides: Settings.showChatsKey) else { return false }
+            Settings.openInT3Key = binding
         }
         return true
+    }
+
+    /// An island shortcut must not be one of its fixed ones or its other rebindable one.
+    private func islandKeyFree(_ binding: KeyBinding, besides other: KeyBinding) -> Bool {
+        !KeyBinding.islandReserved.contains { $0.sameKeys(as: binding) } && !other.sameKeys(as: binding)
     }
 
     @objc private func toggleDot() { panel.ui.dotHiddenByUser.toggle() }

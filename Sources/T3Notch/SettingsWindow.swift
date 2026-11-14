@@ -11,7 +11,7 @@ final class SettingsController {
     private var resignObserver: Any?
     private var keyMonitor: Any?
     private var closeTask: Task<Void, Never>?
-    private static let size = CGSize(width: 340, height: 560)
+    private static let size = CGSize(width: 340, height: 600)
 
     init(store: Store, updater: Updater, ui: OverlayUIState, actions: SettingsModel.Actions) {
         model = SettingsModel(store: store, updater: updater, ui: ui, actions: actions)
@@ -88,7 +88,7 @@ final class SettingsModel {
         var pauseShortcuts: (Bool) -> Void
     }
 
-    enum Shortcut { case showIsland, toggleDot, showChats }
+    enum Shortcut { case showIsland, toggleDot, showChats, openInT3 }
 
     /// The shortcut being recorded, if any; the next key press sets it.
     var recording: Shortcut?
@@ -97,6 +97,7 @@ final class SettingsModel {
     var showIslandKey = Settings.showIslandKey
     var toggleDotKey = Settings.toggleDotKey
     var showChatsKey = Settings.showChatsKey
+    var openInT3Key = Settings.openInT3Key
 
     func startRecording(_ shortcut: Shortcut) {
         taken = nil
@@ -120,6 +121,7 @@ final class SettingsModel {
             case .showIsland: showIslandKey = binding
             case .toggleDot: toggleDotKey = binding
             case .showChats: showChatsKey = binding
+            case .openInT3: openInT3Key = binding
             }
         } else {
             taken = shortcut
@@ -235,6 +237,8 @@ private struct SettingsView: View {
             shortcutRow("Toggle dot", .toggleDot, model.toggleDotKey)
             divider
             shortcutRow("Show chats", .showChats, model.showChatsKey)
+            divider
+            shortcutRow("Open in T3", .openInT3, model.openInT3Key)
         }
         .padding(.horizontal, 14).padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.06)))

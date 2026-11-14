@@ -129,7 +129,7 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Pick the chat (rebind in settings) |
 | ⌘P | Clip part of the screen into the next message |
-| ⌘O | Open the chat in T3, taking the draft and clips along |
+| ⌘O | Open the chat in T3, taking the draft and clips along (rebind in settings) |
 | ⌘. | Stop the running agent |
 | ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list, or scroll the reply |
 | ⌘Z / ⌃Z | Bring back a removed clip |
@@ -175,7 +175,7 @@ Right-click (or ⌃-click) the status dot, or press ⌘, in the island. Esc or a
   steps while it works.
 - **Hide status dot** (⌥⇧Space).
 - **Launch at login**.
-- **Show island**, **Toggle dot** and **Show chats**: click the shortcut, then press new keys to rebind it (⎋ cancels).
+- **Show island**, **Toggle dot**, **Show chats** and **Open in T3**: click the shortcut, then press new keys to rebind it (⎋ cancels).
 - **Reconnect**, **New token** and **Logs**; the circular arrows check for updates (green with the new version when one is out: click to install); the power button quits.
 
 ## How it works

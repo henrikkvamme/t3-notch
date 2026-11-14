@@ -715,6 +715,12 @@ enum Settings {
         set { setBinding(newValue, "showChatsKey") }
     }
 
+    /// The island's shortcut for opening the chat in T3. ⌘O by default.
+    static var openInT3Key: KeyBinding {
+        get { binding("openInT3Key") ?? .openInT3 }
+        set { setBinding(newValue, "openInT3Key") }
+    }
+
     private static func binding(_ key: String) -> KeyBinding? {
         UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(KeyBinding.self, from: $0) }
     }

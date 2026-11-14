@@ -12,10 +12,11 @@ struct KeyBinding: Codable, Equatable, Sendable {
     static let showIsland = KeyBinding(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey), key: "Space")
     static let toggleDot = KeyBinding(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey | shiftKey), key: "Space")
     static let showChats = KeyBinding(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(cmdKey), key: "K")
+    static let openInT3 = KeyBinding(keyCode: UInt32(kVK_ANSI_O), modifiers: UInt32(cmdKey), key: "O")
 
-    /// The island's own fixed shortcuts, which "Show chats" may not take.
+    /// The island's own fixed shortcuts, which its rebindable ones may not take.
     static let islandReserved: [KeyBinding] = [
-        (kVK_Escape, 0), (kVK_Return, 0), (kVK_Return, cmdKey), (kVK_ANSI_P, cmdKey), (kVK_ANSI_O, cmdKey),
+        (kVK_Escape, 0), (kVK_Return, 0), (kVK_Return, cmdKey), (kVK_ANSI_P, cmdKey),
         (kVK_ANSI_Period, cmdKey), (kVK_ANSI_Comma, cmdKey), (kVK_ANSI_Z, cmdKey), (kVK_ANSI_Z, controlKey),
         (kVK_ANSI_J, controlKey), (kVK_ANSI_K, controlKey), (kVK_ANSI_N, controlKey), (kVK_ANSI_P, controlKey),
         (kVK_ANSI_X, cmdKey), (kVK_ANSI_C, cmdKey), (kVK_ANSI_V, cmdKey), (kVK_ANSI_A, cmdKey), (kVK_ANSI_W, cmdKey),

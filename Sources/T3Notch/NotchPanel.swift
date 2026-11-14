@@ -346,13 +346,14 @@ final class PanelController {
         if Settings.showChatsKey.matches(event) {
             setPicker(!ui.pickerOpen); return true
         }
+        if Settings.openInT3Key.matches(event) { // ⌘O by default: open in T3, hide the island
+            openInT3(); return true
+        }
         switch event.keyCode {
         case 53: // Esc
             if ui.pickerOpen { setPicker(false); return true }
             if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
-        case 31 where cmd: // ⌘O opens the thread in T3 and hides the island
-            openInT3(); return true
         case 6 where (cmd || ctrl) && !shift: // ⌘Z / ⌃Z: restore a removed clip, else normal undo
             var restored = false
             withAnimation(Motion.content) { restored = ui.undoClipRemoval() }
