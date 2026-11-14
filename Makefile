@@ -16,6 +16,8 @@ app: build
 	mkdir -p "$(APP)/Contents/MacOS"
 	cp .build/release/T3Notch "$(APP)/Contents/MacOS/T3Notch"
 	cp Resources/Info.plist "$(APP)/Contents/Info.plist"
+	mkdir -p "$(APP)/Contents/Resources"
+	cp Resources/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
 	codesign --force --sign "$(or $(SIGN_ID),-)" "$(APP)"
 
 install: app

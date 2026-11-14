@@ -1,4 +1,6 @@
-# T3 Notch
+<p align="center"><img src="docs/logo.png" width="128" alt="T3 Notch icon"></p>
+
+<h1 align="center">T3 Notch</h1>
 
 A Dynamic-Island-style prompt bar for [T3 Code](https://github.com/pingdotgg/t3code). Press **⌥Space** in
 any app and an island grows out of your MacBook's notch. Type a prompt, clip parts of your screen, and send

@@ -25,6 +25,8 @@ BIN="$(swift build -c release --arch arm64 --show-bin-path)/T3Notch"
 rm -rf "$DIST" && mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/T3Notch"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 
