@@ -47,6 +47,8 @@ struct OverlayView: View {
     @Namespace private var glass
     /// Each picker row's frame, so the selection highlight can slide between them.
     @State private var rowFrames: [Int: CGRect] = [:]
+    /// The clip thumbnail under the pointer, which shows a preview and a remove mark.
+    @State private var hoveredClip: UUID?
 
     private var shown: Bool { ui.mode != .hidden }
     private var openWidth: CGFloat { ui.mode == .peek ? 520 : 680 }
@@ -91,7 +93,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId, ui.clips.count, ui.missingPermissions.count]
+         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip]
     }
 
     private var content: some View {
@@ -451,20 +453,53 @@ struct OverlayView: View {
 
     /// Clips waiting to be sent; click one to remove it.
     private var clipRow: some View {
-        HStack(spacing: 8) {
-            ForEach(ui.clips) { clip in
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(ui.clips) { clip in
+                    let hovered = hoveredClip == clip.id
+                    Image(nsImage: clip.thumbnail)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 64, height: 44)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.15)))
+                        .overlay {
+                            // A press removes the clip.
+                            if hovered {
+                                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                                    .frame(width: 22, height: 22)
+                                    .glassEffect(.regular, in: .circle)
+                                    .transition(.blurReplace.combined(with: .scale(0.6)))
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onHover { inside in
+                            withAnimation(Motion.snappy) {
+                                if inside { hoveredClip = clip.id } else if hoveredClip == clip.id { hoveredClip = nil }
+                            }
+                        }
+                        .onTapGesture {
+                            withAnimation(Motion.content) {
+                                ui.clips.removeAll { $0.id == clip.id }
+                                if hoveredClip == clip.id { hoveredClip = nil }
+                            }
+                        }
+                        .transition(.blurReplace.combined(with: .scale(0.8)))
+                }
+            }
+            // A larger preview of the hovered clip, under the row.
+            if let clip = ui.clips.first(where: { $0.id == hoveredClip }) {
                 Image(nsImage: clip.thumbnail)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 64, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.15)))
-                    .contentShape(Rectangle())
-                    .onTapGesture { withAnimation(Motion.content) { ui.clips.removeAll { $0.id == clip.id } } }
-                    .transition(.blurReplace.combined(with: .scale(0.8)))
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .id(clip.id)
+                    .transition(.blurReplace)
             }
         }
         .animation(Motion.content, value: ui.clips)
+        .animation(Motion.content, value: hoveredClip)
     }
 
     /// A 22pt glass circle inside a 34pt hit area.

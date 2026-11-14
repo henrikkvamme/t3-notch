@@ -15,7 +15,8 @@ struct Clip: Identifiable, Equatable {
 // MARK: - Clipping mode
 
 /// ⌘P from the open island. Freezes every screen, then lets you hover to pick a UI element
-/// (Accessibility) or drag a rectangle; each click or drag adds a clip. Esc, ⏎ or ⌘P finish.
+/// (Accessibility) or drag a rectangle. Releasing adds the clip and returns to the island;
+/// with ⇧ held it stays for more. Esc, ⏎ or ⌘P leave without adding.
 ///
 /// Rects are global and top-left-origin (CoreGraphics/Accessibility space) throughout.
 @MainActor
@@ -101,10 +102,13 @@ final class ClipController {
         }
     }
 
+    /// Adds a clip. Releasing returns to the island with it straight away; holding ⇧ while
+    /// releasing keeps clipping, so the next release without ⇧ brings them all back.
     private func add(_ rect: CGRect) {
         guard rect.width >= 4, rect.height >= 4, let clip = state.crop(rect) else { return }
         state.clips.append(clip)
         withAnimation(Motion.snappy) { state.added.append(rect) }
+        if !NSEvent.modifierFlags.contains(.shift) { finish() }
     }
 
     private func finish() {
