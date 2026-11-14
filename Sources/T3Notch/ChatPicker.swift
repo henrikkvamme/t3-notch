@@ -11,7 +11,7 @@ struct ChatPicker: View {
 
     var body: some View {
         let rows = store.pickerRows(query: ui.pickerQuery)
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) { // room between the search field and the list
             TextField("", text: $ui.pickerQuery)
                 .textFieldStyle(.plain).font(.system(size: 14))
                 .padding(.horizontal, 14).padding(.vertical, 10)
