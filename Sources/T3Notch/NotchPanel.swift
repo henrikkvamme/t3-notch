@@ -111,7 +111,12 @@ final class PanelController {
         // app that had it, so hiding the island can hand focus straight back.
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel,
                                                queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.rememberFrontApp() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.rememberFrontApp()
+                // Clicking a popped-up (peek) island opens it fully, ready to type and clip.
+                if self.ui.mode == .peek { self.expand() }
+            }
         }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
