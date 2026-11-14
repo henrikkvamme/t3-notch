@@ -108,7 +108,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip]
+         store.latestReply?.text.count, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip]
     }
 
     private var content: some View {
@@ -178,23 +178,19 @@ struct OverlayView: View {
     }
 
     private var header: some View {
-        let title = store.targetThread?["title"].string ?? "No thread"
+        let title = store.targetThread?["title"].string
         let project = store.projectTitle(for: store.targetThread)
         return HStack(spacing: 8) {
-            StatusDotGlyph(indicator: store.indicator == .hidden ? .idle : store.indicator)
-            Text(title).font(.callout.weight(.semibold)).lineLimit(1)
-                .contentTransition(.interpolate)
-                .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
-                .transition(.blurReplace)
-            if let project {
-                Text("· \(project)").font(.callout).foregroundStyle(.secondary).lineLimit(1)
+            if let title {
+                StatusDotGlyph(indicator: store.indicator == .hidden ? .idle : store.indicator)
+                Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                    .contentTransition(.interpolate)
+                    .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
                     .transition(.blurReplace)
-            }
-            if store.overrideThreadId != nil {
-                Text("for next prompt").font(.caption2)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .glassEffect(.regular.tint(.blue.opacity(0.35)), in: .capsule)
-                    .transition(.blurReplace.combined(with: .scale(0.8)))
+                if let project {
+                    Text("· \(project)").font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                        .transition(.blurReplace)
+                }
             }
             Spacer(minLength: 8)
             // Own container with no merge distance, so the two circles stay apart.
@@ -210,7 +206,6 @@ struct OverlayView: View {
             .padding(.trailing, -6)
         }
         .animation(Motion.content, value: title)
-        .animation(Motion.content, value: store.overrideThreadId)
     }
 
     @ViewBuilder private var reply: some View {
@@ -341,30 +336,36 @@ struct OverlayView: View {
                 .glassEffectID("field", in: glass)
                 .onSubmit { pick(index: ui.pickerIndex) }
                 .onChange(of: ui.pickerQuery) { ui.pickerIndex = 0 }
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(pickerThreads.enumerated()), id: \.element["id"].string) { i, t in
-                    HStack {
-                        Text(t["title"].string ?? "Untitled").lineLimit(1)
-                        Text(store.projectTitle(for: t) ?? "").foregroundStyle(.secondary).lineLimit(1)
-                        Spacer()
+            let rows = pickerThreads
+            let now = Date()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(rows.enumerated()), id: \.element["id"].string) { i, t in
+                            ThreadRow(thread: t, project: store.projects[t["projectId"].string ?? ""], now: now)
+                                .contentShape(Rectangle())
+                                .onTapGesture { pick(index: i) }
+                                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pickerRows")) }) { rowFrames[i] = $0 }
+                                .id(i)
+                                .transition(.blurReplace)
+                        }
                     }
-                    .font(.callout)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .contentShape(Rectangle())
-                    .onTapGesture { pick(index: i) }
-                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pickerRows")) }) { rowFrames[i] = $0 }
-                    .transition(.blurReplace)
+                    .coordinateSpace(.named("pickerRows"))
+                    .background(alignment: .topLeading) {
+                        // One highlight that slides to the selected row on a quick spring.
+                        if let f = rowFrames[ui.pickerIndex] {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(.white.opacity(0.12))
+                                .frame(width: f.width, height: f.height)
+                                .offset(x: f.minX, y: f.minY)
+                                .animation(Motion.select, value: f)
+                        }
+                    }
                 }
-            }
-            .coordinateSpace(.named("pickerRows"))
-            .background(alignment: .topLeading) {
-                // One highlight that slides to the selected row on a quick spring.
-                if let f = rowFrames[ui.pickerIndex] {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(.white.opacity(0.14))
-                        .frame(width: f.width, height: f.height)
-                        .offset(x: f.minX, y: f.minY)
-                        .animation(Motion.select, value: f)
+                .scrollIndicators(.never)
+                .frame(height: min(pickerListHeight, ui.maxReplyHeight))
+                .onChange(of: ui.pickerIndex) { _, i in
+                    withAnimation(Motion.select) { proxy.scrollTo(i) }
                 }
             }
         }
@@ -391,19 +392,27 @@ struct OverlayView: View {
 
     // MARK: Helpers
 
+    /// Chats in T3's sidebar order, filtered by the search text.
     var pickerThreads: [JSON] {
         let q = ui.pickerQuery.lowercased()
-        return Array(store.recentThreads.filter { t in
+        return Array(store.sidebarThreads.filter { t in
             q.isEmpty || (t["title"].string ?? "").lowercased().contains(q)
                 || (store.projectTitle(for: t) ?? "").lowercased().contains(q)
-        }.prefix(10))
+        }.prefix(60))
+    }
+
+    /// The rows' measured height, so the list is only as tall as its content.
+    private var pickerListHeight: CGFloat {
+        let count = pickerThreads.count
+        guard count > 0 else { return 0 }
+        return (0..<count).compactMap { rowFrames[$0]?.maxY }.max() ?? CGFloat(count) * 62
     }
 
     private func pick(index: Int) {
         let list = pickerThreads
         guard list.indices.contains(index) else { return }
         withAnimation(Motion.content) {
-            store.overrideThreadId = list[index]["id"].string
+            store.focusedThreadId = list[index]["id"].string
             ui.pickerOpen = false
             ui.pickerQuery = ""
             ui.pickerIndex = 0

@@ -134,7 +134,12 @@ final class PanelController {
         present()
         panel.makeKey()
         animateMode(.expanded, afterLayout: wasHidden)
-        focusTextField()
+        // No chat focused: open straight onto the list of chats.
+        if store.targetThreadId == nil && store.connection == .connected && !ui.pickerOpen {
+            setPicker(true)
+        } else {
+            focusTextField()
+        }
     }
 
     /// Shows the reply without taking focus; fades after a delay unless hovered.
@@ -452,7 +457,8 @@ final class PanelController {
     private func setPicker(_ open: Bool) {
         withAnimation(Motion.content) {
             ui.pickerOpen = open
-            ui.pickerIndex = 0
+            // Start on the focused chat, so ⏎ keeps it.
+            ui.pickerIndex = min(store.sidebarThreads.firstIndex { $0["id"].string == store.targetThreadId } ?? 0, 59)
             if !open { ui.pickerQuery = "" }
         }
         focusTextField()

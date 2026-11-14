@@ -50,12 +50,11 @@ github.com/pingdotgg/t3code. Their backpressure rule is in `apps/server/src/term
 
 ### Which thread is the target
 
-The ⌘K override, otherwise the top of T3's sidebar (`packages/client-runtime/src/state/threadSort.ts`):
-
-1. Pinned threads (`pinnedAt` set), ordered by `pinOrderKey`. Unkeyed ones come after the keyed ones, newest `createdAt` first.
-2. With nothing pinned: active threads (not settled, not snoozed), ordered by `activeOrderKey`. Unkeyed ones come first, newest of `createdAt`/`unsettledAt` first.
-
-Archived, deleted and subagent child threads are skipped.
+The chat picked in the ⌘K list (`Store.focusedThreadId`, kept in UserDefaults). There is no default;
+with none, or once it is archived or deleted, opening the island shows the list. The list follows
+T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`): pinned by `pinOrderKey`, then
+active by `activeOrderKey`, then settled or snoozed ones by latest activity. Rows mirror
+`apps/web/src/components/sidebar/SidebarThreadRow.tsx` (`ThreadRow.swift`).
 
 ## Fixing a protocol break
 

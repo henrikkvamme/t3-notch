@@ -36,10 +36,11 @@ final class Store {
     private(set) var threads: [String: JSON] = [:]
     private(set) var projects: [String: JSON] = [:]
 
-    /// Set by ⌘K for the next prompt only.
-    var overrideThreadId: String?
-    /// Threads sent to from the overlay, so a send counts before the server echoes it.
-    private var localSends: [String: Double] = [:]
+    /// The chat prompts go to, picked in the ⌘K list. There is no default: with none (or
+    /// once it is archived or deleted), opening the island shows the list. Kept across launches.
+    var focusedThreadId: String? = UserDefaults.standard.string(forKey: "focusedThreadId") {
+        didSet { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId"); syncThreadSubscription() }
+    }
 
     // The subscribed thread's live detail.
     private(set) var subscribedThreadId: String?
@@ -220,26 +221,36 @@ final class Store {
 
     // MARK: - Target thread
 
-    /// The thread prompts go to: ⌘K override, else the one most recently opened in T3
-    /// (`opens.openedAt`) or sent to (from T3 or this overlay).
-    /// The thread prompts go to: the ⌘K override, else the thread at the top of T3's
-    /// sidebar. That is the top pinned thread, or with nothing pinned, the top active one.
+    /// The focused chat, if it still exists in the sidebar.
     var targetThreadId: String? {
-        if let o = overrideThreadId, threads[o] != nil { return o }
-        return topThread?["id"].string
+        guard let id = focusedThreadId, let t = threads[id], t["archivedAt"].isNull, t["deletedAt"].isNull
+        else { return nil }
+        return id
     }
 
     /// Mirrors T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`):
     /// pinned threads by `pinOrderKey` (unkeyed ones newest first, after keyed), then
     /// active threads by `activeOrderKey` (unkeyed ones first, newest first).
-    private var topThread: JSON? {
+    /// Every top-level chat in T3's sidebar order: pinned, then active, then settled or
+    /// snoozed ones by latest activity (as T3's settled list).
+    var sidebarThreads: [JSON] {
         let candidates = threads.values.filter {
             $0["lineage"]["parentThreadId"].isNull && $0["deletedAt"].isNull && $0["archivedAt"].isNull
         }
-        let pinned = candidates.filter { !$0["pinnedAt"].isNull }
-        if let top = pinned.min(by: pinnedBefore) { return top }
-        let active = candidates.filter(isActive)
-        return (active.isEmpty ? candidates : active).min(by: activeBefore)
+        let pinned = candidates.filter { !$0["pinnedAt"].isNull }.sorted(by: pinnedBefore)
+        let rest = candidates.filter { $0["pinnedAt"].isNull }
+        let active = rest.filter(isActive).sorted(by: activeBefore)
+        let settled = rest.filter { !isActive($0) }
+            .sorted { (Self.activityMs($0) ?? 0) > (Self.activityMs($1) ?? 0) }
+        return pinned + active + settled
+    }
+
+    /// T3's `resolveThreadActivityTimestamp`: the latest of the last user message and the
+    /// latest run's request, start and completion, else `updatedAt`.
+    static func activityMs(_ t: JSON) -> Double? {
+        let candidates = [t["latestUserMessageAt"], t["latestRunRequestedAt"], t["latestRunStartedAt"],
+                          t["latestRunCompletedAt"]].compactMap(\.epochMs)
+        return candidates.max() ?? t["updatedAt"].epochMs
     }
 
     private func pinnedBefore(_ a: JSON, _ b: JSON) -> Bool {
@@ -272,20 +283,6 @@ final class Store {
     }
 
     var targetThread: JSON? { targetThreadId.flatMap { threads[$0] } }
-
-    /// Threads by recency, top-level only (subagent children are skipped).
-    var recentThreads: [JSON] {
-        threads.values
-            .filter { $0["lineage"]["parentThreadId"].isNull && $0["deletedAt"].isNull }
-            .sorted { recency($0) > recency($1) }
-    }
-
-    private func recency(_ t: JSON) -> Double {
-        let id = t["id"].string ?? ""
-        return max(t["opens"]["openedAt"].epochMs ?? 0,
-                   t["latestUserAuthoredMessageAt"].epochMs ?? 0,
-                   localSends[id] ?? 0)
-    }
 
     func projectTitle(for thread: JSON?) -> String? {
         thread.flatMap { projects[$0["projectId"].string ?? ""]?["title"].string }
@@ -416,8 +413,6 @@ final class Store {
         }
         let id = UUID().uuidString.lowercased()
         lastSendError = nil
-        localSends[threadId] = Date().timeIntervalSince1970 * 1000
-        overrideThreadId = nil
         var command: [String: JSON] = [
             "type": "message.dispatch",
             "commandId": .string(id),
