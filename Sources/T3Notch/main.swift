@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var hotkey: Hotkey!
     private var statusItem: NSStatusItem!
+    private var statusDot: StatusDotController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(store: store)
@@ -16,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Finished replies fade; requests that block the agent stay until handled.
             self.panel.peek(autoHide: reason == .finished)
         }
+        statusDot = StatusDotController(store: store, ui: panel.ui) { [weak self] in self?.panel.expand() }
         store.start()
         setUpStatusItem()
         setUpEditMenu()

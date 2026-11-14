@@ -16,6 +16,7 @@ reply streams in above the input.
 | ⌘. | Stop the running agent |
 
 - **Target thread**: the thread you most recently opened in T3 or sent a message to.
+- **Status dot**: while the overlay is hidden, a dot right of the notch shows the target thread: grey idle, pulsing green running, orange needs you, red failed, blue check for a reply you haven't seen. Click it to open the overlay.
 - **Peek**: while an agent runs, hover over the notch to see its reply.
 - **Done**: when a run you started here finishes, the reply appears for 8 seconds.
 - **Needs you**: when the agent asks for approval or a question, the overlay opens and stays open.

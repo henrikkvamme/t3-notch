@@ -147,6 +147,7 @@ final class PanelController {
 
     func expand() {
         peekHideTask?.cancel()
+        store.markReplySeen()
         place(on: NotchGeometry.screenUnderMouse())
         ui.mode = .expanded
         panel.orderFrontRegardless()

@@ -53,6 +53,21 @@ final class Store {
     /// Thread the user sent to from the overlay and is waiting on, for the re-show on completion.
     private(set) var awaitingThreadId: String?
     var lastSendError: String?
+    /// A run started from the overlay finished and the overlay hasn't been opened since.
+    private(set) var unseenReply = false
+    func markReplySeen() { unseenReply = false }
+
+    /// The status shown by the dot next to the notch while the overlay is hidden.
+    enum Indicator: Equatable { case hidden, idle, running, needsYou, failed, done }
+
+    var indicator: Indicator {
+        guard connection == .connected, targetThread != nil else { return .hidden }
+        if pendingRequest != nil || protocolBreak != nil { return .needsYou }
+        if isTargetActive { return .running }
+        if targetStatus == "failed" { return .failed }
+        if unseenReply { return .done }
+        return .idle
+    }
 
     /// Fired when the overlay should show itself without focus (run finished or needs you).
     var onAttentionNeeded: ((AttentionReason) -> Void)?
@@ -335,6 +350,7 @@ final class Store {
         let newStatus = new["activityRunStatus"].string ?? new["status"].string ?? ""
         if awaitingThreadId == id, active.contains(oldStatus), !active.contains(newStatus) {
             awaitingThreadId = nil
+            unseenReply = true
             onAttentionNeeded?(.finished)
         }
     }
