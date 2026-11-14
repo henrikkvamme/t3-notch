@@ -168,22 +168,15 @@ struct OverlayView: View {
             Spacer(minLength: 8)
             // Own container with no merge distance, so the two circles stay apart.
             GlassEffectContainer(spacing: 0) {
-                HStack(spacing: 6) {
-                Button { ui.onClose?() } label: {
-                    Image(systemName: "minus").font(.system(size: 11, weight: .semibold))
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                Button { store.openTargetInT3() } label: {
-                    Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .help("Open in T3  ⌘O")
+                // Negative spacing keeps the circles 6pt apart while their larger hit areas touch.
+                HStack(spacing: -6) {
+                    headerButton("minus") { ui.onClose?() }
+                    headerButton("arrow.up.forward") { store.openTargetInT3() }
                 }
             }
+            // Lay out as the 22pt circles; the extra hit area overhangs without moving anything.
+            .padding(.vertical, -6)
+            .padding(.trailing, -6)
         }
         .animation(Motion.content, value: title)
         .animation(Motion.content, value: store.overrideThreadId)
@@ -192,7 +185,8 @@ struct OverlayView: View {
     @ViewBuilder private var reply: some View {
         if let r = store.latestReply {
             ScrollView {
-                Text(markdown(r.text))
+                // Trimmed: replies often end in blank lines, which would show as empty space.
+                Text(markdown(r.text.trimmingCharacters(in: .whitespacesAndNewlines)))
                     .font(.system(size: 13))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -408,6 +402,18 @@ struct OverlayView: View {
         let parts = [item?["prompt"].string, item?["reason"].string, item?["title"].string, item?["input"].string]
             .compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    /// A 22pt glass circle inside a 34pt hit area.
+    private func headerButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .padding(6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func markdown(_ s: String) -> AttributedString {
