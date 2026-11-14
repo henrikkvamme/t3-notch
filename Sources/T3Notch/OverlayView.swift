@@ -284,6 +284,8 @@ struct OverlayView: View {
             .scaleEffect(typing ? 1 : 0.96, anchor: .top)
             .tint(typing ? .accentColor : .clear) // no stray cursor while collapsed
             .onSubmit(sendDraft)
+            // Collapsing can drop keyboard focus; take it back so the next key types.
+            .onChange(of: typing) { _, now in if !now { ui.onRequestFocus?() } }
             .animation(Motion.open, value: typing)
             .animation(Motion.content, value: store.isTargetActive)
     }

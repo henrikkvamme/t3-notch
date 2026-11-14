@@ -229,10 +229,20 @@ final class PanelController {
     /// visible text field through AppKit once SwiftUI has mounted it.
     private func focusTextField() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self, let root = self.panel.contentView,
-                  let field = Self.findTextField(in: root) else { return }
-            self.panel.makeFirstResponder(field)
+            _ = self?.focusTextFieldNow()
         }
+    }
+
+    /// Focuses the visible text field; returns false when there is none.
+    @discardableResult
+    private func focusTextFieldNow() -> Bool {
+        guard let root = panel.contentView, let field = Self.findTextField(in: root) else { return false }
+        return panel.makeFirstResponder(field)
+    }
+
+    /// True while a text field is being edited (its field editor is first responder).
+    private var isEditingText: Bool {
+        (panel.firstResponder as? NSTextView)?.isEditable == true
     }
 
     private static func findTextField(in view: NSView) -> NSView? {
@@ -274,6 +284,15 @@ final class PanelController {
         case 126 where ui.pickerOpen: // ↑
             movePicker(by: -1); return true
         default:
+            // Typing with no field focused (e.g. after clearing collapsed the input):
+            // focus the field and give it this key, so no character is lost.
+            let plain = event.modifierFlags.intersection([.command, .control]).isEmpty
+            if plain, !isEditingText, let chars = event.characters, !chars.isEmpty,
+               chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+               focusTextFieldNow(), let editor = panel.firstResponder as? NSTextView {
+                editor.keyDown(with: event)
+                return true
+            }
             return false
         }
     }
