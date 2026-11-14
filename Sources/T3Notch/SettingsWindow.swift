@@ -225,6 +225,7 @@ private struct SettingsView: View {
             row("Expand on notch hover", isOn: $model.expandOnHover)
             divider
             row("Show when chat finishes", isOn: $model.showWhenChatFinishes)
+                .help("Does not open while T3 is focused")
             divider
             row("Show commands while working", isOn: $model.showToolSteps)
             divider
