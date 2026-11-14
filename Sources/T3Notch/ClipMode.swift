@@ -66,6 +66,10 @@ final class ClipController {
             windows.append(panel)
         }
         windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) })?.makeKey()
+        // Only the frontmost app may hide the pointer; T3 Notch is frontmost while clipping,
+        // and the island hands focus back when it hides.
+        NSApp.activate()
+        NSCursor.hide()
         withAnimation(Motion.content) { state.active = true }
         installMonitors()
         hover(Self.globalMouse())
@@ -98,6 +102,7 @@ final class ClipController {
     }
 
     private func hover(_ p: CGPoint) {
+        state.pointer = p
         probe.probe(at: p) { [weak self] chain in
             self?.state.setChain(chain)
         }
@@ -116,6 +121,7 @@ final class ClipController {
         guard !finished else { return }
         finished = true
         for m in monitors { NSEvent.removeMonitor(m) }
+        NSCursor.unhide()
         monitors = []
         withAnimation(Motion.close) { state.active = false }
         let clips = state.clips
@@ -147,6 +153,8 @@ final class ClipState {
     /// How many steps up the chain the highlight is.
     var depth = 0
     var drag: CGRect?
+    /// Where the pointer is (global), for the dot cursor.
+    var pointer: CGPoint?
     var added: [CGRect] = []
     var clips: [Clip] = []
     private var scrollAccumulator: CGFloat = 0
@@ -179,7 +187,12 @@ final class ClipState {
             step = e.scrollingDeltaY > 0 ? 1 : -1
         }
         let top = max(chain.count - 1, 0)
-        depth = min(max(min(depth, top) + step, 0), top)
+        let current = min(depth, top)
+        if current == 0 && step < 0 {
+            depth = .max // past the smallest level: the window, whatever element is under you
+        } else {
+            depth = min(max(current + step, 0), top)
+        }
     }
 
     /// Crops a global rect out of the frozen frame of the screen it is mostly on.
@@ -333,16 +346,26 @@ private struct ClipOverlayView: View {
             ForEach(Array(state.added.enumerated()), id: \.offset) { _, r in
                 let l = local(r)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(.green.opacity(0.9), lineWidth: 2)
+                    .strokeBorder(Color(white: 0.55), lineWidth: 2) // darker than the live selection
                     .frame(width: l.width, height: l.height)
                     .offset(x: l.minX, y: l.minY)
                     .transition(.opacity.combined(with: .scale(1.04)))
             }
-            if let h = highlight, state.active {
+            // The pointer: a small white dot that morphs into the selection outline when an
+            // element is under it or a drag starts, and back to a dot when nothing is.
+            if state.active, let shape = highlight ?? state.pointer.map({ p in
+                let l = local(CGRect(origin: p, size: .zero))
+                return CGRect(x: l.minX - 6, y: l.minY - 6, width: 12, height: 12)
+            }) {
+                let isDot = highlight == nil
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
-                    .frame(width: h.width, height: h.height)
-                    .offset(x: h.minX, y: h.minY)
+                    .fill(.white.opacity(isDot ? 0.95 : 0))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
+                    .shadow(color: .black.opacity(isDot ? 0.35 : 0), radius: 2)
+                    .frame(width: shape.width, height: shape.height)
+                    .offset(x: shape.minX, y: shape.minY)
+                    .allowsHitTesting(false)
             }
         }
         .frame(width: screenRect.width, height: screenRect.height, alignment: .topLeading)
@@ -356,6 +379,7 @@ private struct ClipOverlayView: View {
             DragGesture(minimumDistance: 0, coordinateSpace: .local)
                 .onChanged { v in
                     let start = global(v.startLocation), now = global(v.location)
+                    state.pointer = now
                     if hypot(now.x - start.x, now.y - start.y) > 4 {
                         state.drag = CGRect(x: min(start.x, now.x), y: min(start.y, now.y),
                                             width: abs(now.x - start.x), height: abs(now.y - start.y))
