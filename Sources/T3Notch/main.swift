@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey = Hotkey { [weak self] in self?.panel.toggle() }
         store.onAttentionNeeded = { [weak self] reason in
             guard let self, self.panel.mode == .hidden else { return }
+            // Already in T3 Code: it shows the reply and the request itself.
+            if let t3 = self.store.runtime?.app?.processIdentifier,
+               NSWorkspace.shared.frontmostApplication?.processIdentifier == t3 { return }
             // Finished replies fade; requests that block the agent stay until handled.
             self.panel.peek(autoHide: reason == .finished)
         }

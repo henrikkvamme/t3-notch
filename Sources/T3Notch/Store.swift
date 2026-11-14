@@ -358,14 +358,15 @@ final class Store {
             runtimeRequests = index(p["runtimeRequests"])
             let items = (p["turnItems"].array ?? []) + (p["visibleTurnItems"].array ?? []).map { $0["item"] }
             requestItems = [:]
-            for i in items { keepRequestItem(i) }
+            activityItems = [:]
+            for i in items { keepRequestItem(i); keepActivityItem(i) }
         case "event":
             let e = item["event"]
             let payload = e["payload"]
             switch e["type"].string {
             case "message.updated": if let id = payload["id"].string { messages[id] = payload }
             case "runtime-request.updated": if let id = payload["id"].string { runtimeRequests[id] = payload }
-            case "turn-item.updated": keepRequestItem(payload)
+            case "turn-item.updated": keepRequestItem(payload); keepActivityItem(payload)
             default: break
             }
         default:
@@ -377,6 +378,22 @@ final class Store {
         Dictionary((arr.array ?? []).compactMap { x in x["id"].string.map { ($0, x) } }, uniquingKeysWith: { _, b in b })
     }
 
+    /// What the agent is doing in a run: its reasoning and tool steps.
+    private(set) var activityItems: [String: JSON] = [:]
+    private static let activityTypes: Set<String> = [
+        "reasoning", "command_execution", "file_change", "file_search", "web_search", "dynamic_tool",
+    ]
+
+    private func keepActivityItem(_ item: JSON) {
+        guard let type = item["type"].string, Self.activityTypes.contains(type), let id = item["id"].string else { return }
+        activityItems[id] = item
+        if activityItems.count > 400 {
+            // Keep the newest; old runs' steps are never shown.
+            let oldest = activityItems.values.sorted { Self.started($0) < Self.started($1) }.prefix(100)
+            for o in oldest { if let id = o["id"].string { activityItems[id] = nil } }
+        }
+    }
+
     private func keepRequestItem(_ item: JSON) {
         let type = item["type"].string
         guard type == "approval_request" || type == "user_input_request", let rid = item["requestId"].string else { return }
@@ -385,22 +402,97 @@ final class Store {
 
     // MARK: - Derived view state
 
-    /// The latest assistant message in the target thread, streaming or finished.
-    /// The latest assistant message in the target thread, streaming or finished. `id`
-    /// changes when a new message starts, which the view animates as a change of message.
-    var latestReply: (id: String, text: String, streaming: Bool)? {
-        if subscribedThreadId == targetThreadId,
-           let m = messages.values
-            .filter({ $0["role"].string == "assistant" && $0["notification"].isNull && !($0["text"].string ?? "").isEmpty })
-            .max(by: { ($0["createdAt"].epochMs ?? 0) < ($1["createdAt"].epochMs ?? 0) }) {
-            return (m["id"].string ?? "", m["text"].string ?? "", m["streaming"].bool ?? false)
+    /// What the reply area shows.
+    struct Reply: Equatable {
+        let id: String
+        let text: String
+        let streaming: Bool
+        /// The agent is working and this is its reasoning or current step, not a reply.
+        let thinking: Bool
+        /// Image attachments of this exchange: the reply's and the prompt's.
+        let images: [JSON]
+    }
+
+    /// While a run works: its newest step (reasoning text, or the tool step) or its reply as it
+    /// streams, never the previous run's reply. Otherwise the latest reply. `id` changes when
+    /// a different message or step takes over, which the view animates.
+    var latestReply: Reply? {
+        if subscribedThreadId == targetThreadId {
+            if isTargetActive, let run = targetThread?["activeRunId"].string ?? targetThread?["latestRunId"].string {
+                let reply = assistantMessages.filter { $0["runId"].string == run }.max { Self.started($0) < Self.started($1) }
+                let step = activityItems.values.filter { $0["runId"].string == run }.max { Self.started($0) < Self.started($1) }
+                if let reply, step.map({ Self.started(reply) >= Self.started($0) }) ?? true {
+                    return makeReply(reply)
+                }
+                if let step {
+                    return Reply(id: step["id"].string ?? run, text: Self.describe(step),
+                                 streaming: step["streaming"].bool ?? true, thinking: true, images: [])
+                }
+                return Reply(id: "starting-\(run)", text: "", streaming: true, thinking: true, images: [])
+            }
+            if let m = assistantMessages.max(by: { Self.started($0) < Self.started($1) }) {
+                return makeReply(m)
+            }
         }
         // Before the thread stream arrives, the shell's summary is enough.
         let lvm = targetThread?["latestVisibleMessage"]
         if let text = lvm?["text"].string, lvm?["role"].string == "assistant" {
-            return (lvm?["id"].string ?? "", text, false)
+            return Reply(id: lvm?["id"].string ?? "", text: text, streaming: false, thinking: false, images: [])
         }
         return nil
+    }
+
+    private var assistantMessages: [JSON] {
+        messages.values.filter {
+            $0["role"].string == "assistant" && $0["notification"].isNull && !($0["text"].string ?? "").isEmpty
+        }
+    }
+
+    private func makeReply(_ m: JSON) -> Reply {
+        let run = m["runId"].string
+        let prompt = messages.values.filter { $0["role"].string == "user" && run != nil && $0["runId"].string == run }
+        let images = ((prompt.flatMap { $0["attachments"].array ?? [] }) + (m["attachments"].array ?? []))
+            .filter { $0["type"].string == "image" && $0["id"].string != nil }
+        return Reply(id: m["id"].string ?? "", text: m["text"].string ?? "", streaming: m["streaming"].bool ?? false,
+                     thinking: false, images: images)
+    }
+
+    private static func started(_ x: JSON) -> Double {
+        x["startedAt"].epochMs ?? x["createdAt"].epochMs ?? x["updatedAt"].epochMs ?? 0
+    }
+
+    /// One line for a step: the reasoning itself, or what the tool is doing.
+    private static func describe(_ step: JSON) -> String {
+        let text = { (k: String) in (step[k].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        switch step["type"].string {
+        case "reasoning": return text("text")
+        case "command_execution": return "$ " + (text("input").split(separator: "\n").first.map(String.init) ?? "")
+        case "file_change": return "Editing " + text("fileName")
+        case "file_search": return "Searching " + text("pattern")
+        case "web_search": return "Searching the web"
+        default: return text("title")
+        }
+    }
+
+    // MARK: - Images
+
+    /// Attachment images by id, loaded through T3's `assets.createUrl`.
+    private(set) var attachmentImages: [String: NSImage] = [:]
+    @ObservationIgnored private var loadingImages = Set<String>()
+
+    func loadImage(_ attachmentId: String) async {
+        guard !Store.demo, attachmentImages[attachmentId] == nil, !loadingImages.contains(attachmentId),
+              let runtime else { return }
+        loadingImages.insert(attachmentId)
+        defer { loadingImages.remove(attachmentId) }
+        guard let result = try? await rpc.call("assets.createUrl", [
+            "resource": ["_tag": "attachment", "attachmentId": .string(attachmentId), "disposition": "inline"],
+        ]), let relative = result["relativeUrl"].string,
+              let url = URL(string: relative, relativeTo: runtime.httpBase) else { return }
+        var request = URLRequest(url: url)
+        if let token = Auth.storedToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        guard let (data, _) = try? await URLSession.shared.data(for: request), let image = NSImage(data: data) else { return }
+        attachmentImages[attachmentId] = image
     }
 
     /// The target thread's status, e.g. "running", "waiting", "completed", "idle".

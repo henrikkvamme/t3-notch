@@ -108,7 +108,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip]
+         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip]
     }
 
     private var content: some View {
@@ -214,10 +214,7 @@ struct OverlayView: View {
                 // One view per message: a new message slides the old one up and out while
                 // the new one rises in, both crossfading through a blur.
                 ZStack(alignment: .topLeading) {
-                    // Trimmed: replies often end in blank lines, which would show as empty space.
-                    Text(markdown(r.text.trimmingCharacters(in: .whitespacesAndNewlines)))
-                        .font(.system(size: 13))
-                        .textSelection(.enabled)
+                    replyText(r)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentTransition(.identity) // streamed text grows; it should not crossfade
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
@@ -241,6 +238,10 @@ struct OverlayView: View {
             .frame(height: min(ui.replyTextHeight, ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight))
             .onChange(of: r.text) {
                 if r.streaming { withAnimation(Motion.content) { ui.replyScroll.scrollTo(edge: .bottom) } }
+            }
+            if !r.images.isEmpty {
+                ReplyImages(store: store, images: r.images)
+                    .transition(.blurReplace)
             }
         } else if ui.mode == .expanded {
             Text("No reply yet").font(.callout).foregroundStyle(.tertiary)
@@ -473,6 +474,25 @@ struct OverlayView: View {
         .animation(Motion.content, value: hoveredClip)
     }
 
+    /// A reply in full text; the agent's thinking or current step dimmed; and before its
+    /// first step, a softly pulsing "Thinking".
+    @ViewBuilder private func replyText(_ r: Store.Reply) -> some View {
+        // Trimmed: replies often end in blank lines, which would show as empty space.
+        let text = r.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if r.thinking && text.isEmpty {
+            ThinkingLabel()
+        } else if r.thinking {
+            Text(markdown(text))
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        } else {
+            Text(markdown(text))
+                .font(.system(size: 13))
+                .textSelection(.enabled)
+        }
+    }
+
     /// A 22pt glass circle inside a 34pt hit area.
     private func headerButton(_ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -525,5 +545,68 @@ struct MessageChange: Transition {
             .offset(y: phase == .willAppear ? distance : phase == .didDisappear ? -distance : 0)
             .opacity(phase.isIdentity ? 1 : 0)
             .blur(radius: phase.isIdentity ? 0 : 8)
+    }
+}
+
+/// "Thinking", gently pulsing, while a run has started but has no step or reply yet.
+private struct ThinkingLabel: View {
+    @State private var dim = false
+
+    var body: some View {
+        Text("Thinking")
+            .font(.system(size: 12.5))
+            .foregroundStyle(.secondary)
+            .opacity(dim ? 0.45 : 0.9)
+            .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
+    }
+}
+
+/// Images of the shown exchange as thumbnails; hovering one shows it larger underneath.
+private struct ReplyImages: View {
+    let store: Store
+    let images: [JSON]
+    @State private var hovered: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(images.compactMap { $0["id"].string }, id: \.self) { id in
+                    thumbnail(id)
+                        .task(id: id) { await store.loadImage(id) }
+                        .onHover { inside in
+                            withAnimation(Motion.snappy) {
+                                if inside { hovered = id } else if hovered == id { hovered = nil }
+                            }
+                        }
+                }
+            }
+            if let id = hovered, let image = store.attachmentImages[id] {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .id(id)
+                    .transition(.blurReplace)
+            }
+        }
+        .animation(Motion.content, value: hovered)
+    }
+
+    @ViewBuilder private func thumbnail(_ id: String) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        ZStack {
+            if let image = store.attachmentImages[id] {
+                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                    .transition(.opacity)
+            } else {
+                shape.fill(.white.opacity(0.08))
+            }
+        }
+        .frame(width: 64, height: 44)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(.white.opacity(0.15)))
+        .animation(Motion.content, value: store.attachmentImages[id] != nil)
     }
 }

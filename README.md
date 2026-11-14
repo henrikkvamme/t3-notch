@@ -16,8 +16,9 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 
 - **Prompt from anywhere.** ⌥Space opens the island over any app, fullscreen ones included. The input appears
   when you start typing. Sending hides the island and hands focus back to the app you were in.
-- **Live replies.** The latest reply streams in. When a new message arrives, the old one slides out as the new
-  one blurs in.
+- **Live replies.** While the agent works, the island shows what it is doing: its thinking or its current step
+  (`$ swift test`, `Editing Store.swift`). Then the reply streams in, sliding the old one out as it blurs in.
+  Images in the exchange show as thumbnails; hover one to see it larger.
 - **Queue or steer.** ⏎ queues your message after the running turn; ⌘⏎ steers the turn that is running.
 - **Pick the chat.** ⌘K opens a list that mirrors T3's sidebar: pinned, then active, then the rest, with
   project, status, time, branch and provider. With no chat picked, the island opens on this list.
@@ -147,8 +148,8 @@ Click the dot to open the island.
 
 ### Menu bar icon
 
-- **Show When Chat Finishes** (on by default) pops the island open with the reply when the chat's run ends.
-  Clicking the popped-up island opens it fully.
+- **Show When Chat Finishes** (on by default) pops the island open with the reply when the chat's run ends,
+  unless you are already in T3 Code. Clicking the popped-up island opens it fully.
 - **Launch at Login**, **Reconnect**, **Reissue Token**, and **Open Logs Folder**.
 
 ## How it works
