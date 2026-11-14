@@ -27,6 +27,8 @@ final class OverlayUIState {
 
     var onClose: (() -> Void)?
     var onRequestFocus: (() -> Void)?
+    /// Typing started or stopped; the controller shows or hides the text cursor.
+    var onTypingChange: ((Bool) -> Void)?
     var onIslandFrameChange: (() -> Void)?
 }
 
@@ -274,10 +276,12 @@ struct OverlayView: View {
             .opacity(typing ? 1 : 0)
             .blur(radius: typing ? 0 : 6)
             .scaleEffect(typing ? 1 : 0.96, anchor: .top)
-            .tint(typing ? .accentColor : .clear) // no stray cursor while collapsed
             .onSubmit(sendDraft)
             // Collapsing can drop keyboard focus; take it back so the next key types.
-            .onChange(of: typing) { _, now in if !now { ui.onRequestFocus?() } }
+            .onChange(of: typing) { _, now in
+                if !now { ui.onRequestFocus?() }
+                ui.onTypingChange?(now)
+            }
             .animation(Motion.open, value: typing)
     }
 

@@ -86,6 +86,7 @@ final class PanelController {
         self.ui = OverlayUIState()
         ui.onClose = { [weak self] in self?.hide() }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
+        ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
         let host = FirstClickHostingView(rootView: OverlayView(store: store, ui: ui))
         host.sizingOptions = []
@@ -233,11 +234,22 @@ final class PanelController {
         }
     }
 
+    /// The text cursor shows (in the accent colour) only while there is text, so the
+    /// collapsed input has no stray cursor and the open one always has a visible one.
+    private func updateCursor() {
+        guard let editor = panel.firstResponder as? NSTextView else { return }
+        let showing = ui.pickerOpen || !ui.draft.isEmpty
+        editor.insertionPointColor = showing ? .controlAccentColor : .clear
+        editor.updateInsertionPointStateAndRestartTimer(true)
+    }
+
     /// Focuses the visible text field; returns false when there is none.
     @discardableResult
     private func focusTextFieldNow() -> Bool {
         guard let root = panel.contentView, let field = Self.findTextField(in: root) else { return false }
-        return panel.makeFirstResponder(field)
+        let ok = panel.makeFirstResponder(field)
+        updateCursor()
+        return ok
     }
 
     /// True while a text field is being edited (its field editor is first responder).
