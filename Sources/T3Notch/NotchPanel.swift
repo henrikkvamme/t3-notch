@@ -87,7 +87,7 @@ final class PanelController {
         ui.onClose = { [weak self] in self?.hide() }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
-        let host = NSHostingView(rootView: OverlayView(store: store, ui: ui))
+        let host = FirstClickHostingView(rootView: OverlayView(store: store, ui: ui))
         host.sizingOptions = []
         panel.contentView = host
         panel.ignoresMouseEvents = true

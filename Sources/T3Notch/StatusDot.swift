@@ -12,14 +12,15 @@ final class StatusDotController {
     private let panel: NotchPanel
     private let store: Store
     private let ui: OverlayUIState
-    private static let size = CGSize(width: 26, height: 26)
+    /// Clickable area: from the notch's edge, the full menu-bar height, 44pt wide.
+    private static let width: CGFloat = 44
 
     init(store: Store, ui: OverlayUIState, onClick: @escaping () -> Void) {
         self.store = store
         self.ui = ui
         panel = NotchPanel()
         panel.level = .statusBar + 1
-        panel.contentView = NSHostingView(rootView: StatusDotView(store: store, ui: ui, onClick: onClick))
+        panel.contentView = FirstClickHostingView(rootView: StatusDotView(store: store, ui: ui, onClick: onClick))
         place()
         panel.orderFrontRegardless()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -32,9 +33,7 @@ final class StatusDotController {
     private func place() {
         let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
         let notch = NotchGeometry.forScreen(screen).notchRect
-        let s = Self.size
-        panel.setFrame(NSRect(x: notch.maxX + 6, y: notch.midY - s.height / 2, width: s.width, height: s.height),
-                       display: true)
+        panel.setFrame(NSRect(x: notch.maxX, y: notch.minY, width: Self.width, height: notch.height), display: true)
     }
 
     /// Keeps click-through in step with whether a dot is showing.
@@ -47,6 +46,12 @@ final class StatusDotController {
     }
 }
 
+/// Takes the first click even though the app is never active; otherwise macOS spends
+/// that click activating the window and the tap never fires.
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 private struct StatusDotView: View {
     let store: Store
     let ui: OverlayUIState
@@ -57,13 +62,23 @@ private struct StatusDotView: View {
         ui.mode == .hidden ? store.indicator : .hidden
     }
 
+    @State private var hovering = false
+
     var body: some View {
         let indicator = Self.effective(store: store, ui: ui)
         StatusDotGlyph(indicator: indicator)
             // Wait for the island to shrink into the notch before popping back out.
             .animation(indicator == .hidden ? Motion.snappy : Motion.open.delay(0.22), value: indicator == .hidden)
-            .frame(width: 26, height: 26)
+            .background {
+                // Shows the whole clickable area on hover.
+                Circle().fill(.white.opacity(hovering && indicator != .hidden ? 0.16 : 0))
+                    .frame(width: 26, height: 26)
+                    .scaleEffect(hovering ? 1 : 0.6)
+            }
+            .animation(Motion.snappy, value: hovering)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
+            .onHover { hovering = $0 }
             .onTapGesture(perform: onClick)
             .help(store.targetThread?["title"].string ?? "T3")
     }
