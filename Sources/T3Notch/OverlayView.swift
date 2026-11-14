@@ -188,13 +188,23 @@ struct OverlayView: View {
     @ViewBuilder private var reply: some View {
         if let r = store.latestReply {
             ScrollView {
-                // Trimmed: replies often end in blank lines, which would show as empty space.
-                Text(markdown(r.text.trimmingCharacters(in: .whitespacesAndNewlines)))
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentTransition(.identity) // streamed text grows; it should not crossfade
-                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { ui.replyTextHeight = $0 }
+                // One view per message: a new message slides the old one up and out while
+                // the new one rises in, both crossfading through a blur.
+                ZStack(alignment: .topLeading) {
+                    // Trimmed: replies often end in blank lines, which would show as empty space.
+                    Text(markdown(r.text.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentTransition(.identity) // streamed text grows; it should not crossfade
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
+                            // Only the current message sizes the reply, not one animating out.
+                            if r.id == store.latestReply?.id { ui.replyTextHeight = h }
+                        }
+                        .id(r.id)
+                        .transition(MessageChange())
+                }
+                .animation(Motion.message, value: r.id)
             }
             .scrollIndicators(.never)
             .scrollPosition($ui.replyScroll)
@@ -446,5 +456,18 @@ private struct OptionList: View {
                 .font(.callout)
             }
         }
+    }
+}
+
+/// A message replacing another: the old one leaves upward, the new one arrives from
+/// below, both fading through a blur.
+struct MessageChange: Transition {
+    var distance: CGFloat = 18
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .offset(y: phase == .willAppear ? distance : phase == .didDisappear ? -distance : 0)
+            .opacity(phase.isIdentity ? 1 : 0)
+            .blur(radius: phase.isIdentity ? 0 : 8)
     }
 }

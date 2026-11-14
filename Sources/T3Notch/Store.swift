@@ -347,16 +347,20 @@ final class Store {
     // MARK: - Derived view state
 
     /// The latest assistant message in the target thread, streaming or finished.
-    var latestReply: (text: String, streaming: Bool)? {
+    /// The latest assistant message in the target thread, streaming or finished. `id`
+    /// changes when a new message starts, which the view animates as a change of message.
+    var latestReply: (id: String, text: String, streaming: Bool)? {
         if subscribedThreadId == targetThreadId,
            let m = messages.values
             .filter({ $0["role"].string == "assistant" && $0["notification"].isNull && !($0["text"].string ?? "").isEmpty })
             .max(by: { ($0["createdAt"].epochMs ?? 0) < ($1["createdAt"].epochMs ?? 0) }) {
-            return (m["text"].string ?? "", m["streaming"].bool ?? false)
+            return (m["id"].string ?? "", m["text"].string ?? "", m["streaming"].bool ?? false)
         }
         // Before the thread stream arrives, the shell's summary is enough.
         let lvm = targetThread?["latestVisibleMessage"]
-        if let text = lvm?["text"].string, lvm?["role"].string == "assistant" { return (text, false) }
+        if let text = lvm?["text"].string, lvm?["role"].string == "assistant" {
+            return (lvm?["id"].string ?? "", text, false)
+        }
         return nil
     }
 

@@ -64,6 +64,8 @@ enum Motion {
     static let content = Animation.smooth(duration: 0.32)
     /// Small elements: dot, selection, buttons.
     static let snappy = Animation.snappy(duration: 0.28)
+    /// One reply replacing another.
+    static let message = Animation.smooth(duration: 0.45)
     /// List selection: fast and nearly critically damped, so it feels instant.
     static let select = Animation.spring(response: 0.16, dampingFraction: 0.9)
 }
