@@ -7,7 +7,7 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) runs [`scripts/release.sh`](scripts/release.sh) on a
-`macos-26` runner. It builds a universal app (arm64 + x86_64), stamps the tag's version into `Info.plist`, signs
+`macos-26` runner. It builds an Apple silicon (arm64) app, stamps the tag's version into `Info.plist`, signs
 it with Developer ID and the hardened runtime, notarizes and staples it, and attaches `T3-Notch-<version>.zip`
 (plus its SHA-256) to a GitHub Release. Installed copies see the release within six hours, or at their next
 launch, and offer the update.

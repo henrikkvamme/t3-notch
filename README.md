@@ -61,7 +61,7 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 
 ## Requirements
 
-- macOS 26 or later, on an Apple silicon or Intel Mac. A notch is optional: without one, the island grows from a
+- macOS 26 or later, on an Apple silicon Mac. A notch is optional: without one, the island grows from a
   drawn notch at the top of the screen.
 - The [T3 Code](https://github.com/pingdotgg/t3code) desktop app, running on the same Mac.
 

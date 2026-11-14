@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds a universal, Developer ID signed, notarized and stapled "T3 Notch.app", zipped for a
+# Builds an Apple silicon (arm64), Developer ID signed, notarized and stapled "T3 Notch.app", zipped for a
 # GitHub Release. Used by .github/workflows/release.yml; also runs locally.
 #
 #   scripts/release.sh <version>            e.g. scripts/release.sh 0.2.0
@@ -18,9 +18,9 @@ ZIP="$DIST/T3-Notch-$VERSION.zip"
 SIGN_ID="${SIGN_ID:-$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk '{print $2}')}"
 [ -n "$SIGN_ID" ] || { echo "No Developer ID Application certificate in the keychain." >&2; exit 1; }
 
-echo "Building $VERSION (arm64 + x86_64)"
-swift build -c release --arch arm64 --arch x86_64
-BIN=".build/apple/Products/Release/T3Notch"
+echo "Building $VERSION (arm64)"
+swift build -c release --arch arm64
+BIN="$(swift build -c release --arch arm64 --show-bin-path)/T3Notch"
 
 rm -rf "$DIST" && mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/T3Notch"
