@@ -5,21 +5,23 @@ import SwiftUI
 /// overlay is hidden. Clicking it opens the overlay.
 ///
 /// It goes on the screen with a real notch, or on the main screen beside where the
-/// drawn notch would be when no screen has one.
+/// drawn notch would be when no screen has one. The panel stays on screen so the dot
+/// can animate in and out; it ignores the mouse while there is no dot.
 @MainActor
 final class StatusDotController {
     private let panel: NotchPanel
     private let store: Store
     private let ui: OverlayUIState
-    private static let size = CGSize(width: 22, height: 22)
+    private static let size = CGSize(width: 26, height: 26)
 
     init(store: Store, ui: OverlayUIState, onClick: @escaping () -> Void) {
         self.store = store
         self.ui = ui
         panel = NotchPanel()
         panel.level = .statusBar + 1
-        panel.contentView = NSHostingView(rootView: StatusDotView(store: store, onClick: onClick))
+        panel.contentView = NSHostingView(rootView: StatusDotView(store: store, ui: ui, onClick: onClick))
         place()
+        panel.orderFrontRegardless()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.place() }
@@ -31,15 +33,14 @@ final class StatusDotController {
         let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
         let notch = NotchGeometry.forScreen(screen).notchRect
         let s = Self.size
-        panel.setFrame(NSRect(x: notch.maxX + 8, y: notch.midY - s.height / 2, width: s.width, height: s.height),
+        panel.setFrame(NSRect(x: notch.maxX + 6, y: notch.midY - s.height / 2, width: s.width, height: s.height),
                        display: true)
     }
 
-    /// Re-runs whenever the store or overlay mode changes (Observation tracking).
+    /// Keeps click-through in step with whether a dot is showing.
     private func observe() {
         withObservationTracking {
-            let visible = ui.mode == .hidden && store.indicator != .hidden
-            if visible { panel.orderFrontRegardless() } else { panel.orderOut(nil) }
+            panel.ignoresMouseEvents = StatusDotView.effective(store: store, ui: ui) == .hidden
         } onChange: {
             Task { @MainActor [weak self] in self?.observe() }
         }
@@ -48,45 +49,57 @@ final class StatusDotController {
 
 private struct StatusDotView: View {
     let store: Store
+    let ui: OverlayUIState
     let onClick: () -> Void
 
+    /// No dot while the island is open: the island's own header shows the status.
+    static func effective(store: Store, ui: OverlayUIState) -> Store.Indicator {
+        ui.mode == .hidden ? store.indicator : .hidden
+    }
+
     var body: some View {
-        StatusDotGlyph(indicator: store.indicator)
-            .frame(width: 22, height: 22)
+        let indicator = Self.effective(store: store, ui: ui)
+        StatusDotGlyph(indicator: indicator)
+            // Wait for the island to shrink into the notch before popping back out.
+            .animation(indicator == .hidden ? Motion.snappy : Motion.open.delay(0.22), value: indicator == .hidden)
+            .frame(width: 26, height: 26)
             .contentShape(Rectangle())
             .onTapGesture(perform: onClick)
             .help(store.targetThread?["title"].string ?? "T3")
     }
 }
 
-/// The dot itself for one state; also used by `--render-dots` to draw previews.
+/// The dot for one state. One SF Symbol morphs between states (`.replace`), bounces when
+/// the state changes, and pulses while running. Also used by `--render-dots`.
 struct StatusDotGlyph: View {
     let indicator: Store.Indicator
     var animate = true
-    @State private var pulse = false
+
+    private var spec: (symbol: String, color: Color, scale: CGFloat) {
+        switch indicator {
+        case .hidden, .idle: return ("circle.fill", .gray.opacity(0.6), 0.5)
+        case .running: return ("circle.fill", .green, 0.6)
+        case .needsYou: return ("exclamationmark.circle.fill", .orange, 1)
+        case .failed: return ("xmark.circle.fill", .red, 1)
+        case .done: return ("checkmark.circle.fill", .blue, 1)
+        }
+    }
 
     var body: some View {
         ZStack {
-            switch indicator {
-            case .hidden:
-                EmptyView()
-            case .idle:
-                Circle().fill(.gray.opacity(0.55)).frame(width: 7, height: 7)
-            case .running:
-                Circle().fill(.green).frame(width: 8, height: 8)
-                    .opacity(pulse ? 0.35 : 1)
-                    .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                    .onAppear { if animate { pulse = true } }
-                    .onDisappear { pulse = false }
-            case .needsYou:
-                Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(.orange)
-            case .failed:
-                Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(.red)
-            case .done:
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.blue)
+            if indicator != .hidden {
+                Image(systemName: spec.symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(spec.color)
+                    .scaleEffect(spec.scale)
+                    .contentTransition(.symbolEffect(.replace.magic(fallback: .downUp.byLayer)))
+                    .symbolEffect(.pulse, options: .repeating, isActive: animate && indicator == .running)
+                    .symbolEffect(.bounce, options: .nonRepeating, value: animate ? indicator : .idle)
+                    .transition(.blurReplace.combined(with: .scale(0.2)))
             }
         }
         .frame(width: 22, height: 22)
+        .animation(Motion.open, value: indicator)
     }
 }
 
@@ -103,7 +116,7 @@ enum DotPreview {
                 HStack(spacing: 18) {
                     ZStack {
                         Rectangle().fill(Color(white: 0.16)) // menu bar
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             UnevenRoundedRectangle(bottomLeadingRadius: 10, bottomTrailingRadius: 10)
                                 .fill(.black).frame(width: 190, height: 32)
                             StatusDotGlyph(indicator: s.0, animate: false)

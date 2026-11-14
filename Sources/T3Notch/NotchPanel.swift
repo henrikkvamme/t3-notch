@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Borderless, non-activating panel that sits on top of the notch (or a drawn notch on
-/// screens without one) and grows downward to fit its content.
+/// Borderless, non-activating panel over the notch. It is a fixed transparent canvas: the
+/// island inside is drawn and animated by SwiftUI, so it can grow out of the notch.
 final class NotchPanel: NSPanel {
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 200, height: 40),
@@ -15,6 +15,7 @@ final class NotchPanel: NSPanel {
         hasShadow = false
         hidesOnDeactivate = false
         isMovable = false
+        acceptsMouseMovedEvents = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         animationBehavior = .none
     }
@@ -51,8 +52,20 @@ struct NotchGeometry: Equatable {
     }
 }
 
-/// Shows, hides and sizes the panel. The SwiftUI view reports its size; the panel
-/// stays top-centred on the chosen screen.
+/// The springs every transition uses, so the island moves as one system.
+enum Motion {
+    /// Growing out of the notch: a little overshoot, like the Dynamic Island.
+    static let open = Animation.bouncy(duration: 0.5, extraBounce: 0.08)
+    /// Shrinking back into the notch: no overshoot.
+    static let close = Animation.smooth(duration: 0.34)
+    /// Content changes inside the open island.
+    static let content = Animation.smooth(duration: 0.32)
+    /// Small elements: dot, selection, buttons.
+    static let snappy = Animation.snappy(duration: 0.28)
+}
+
+/// Shows, hides and animates the island. The panel is a fixed canvas top-centred on the
+/// chosen screen; clicks pass through everywhere except the island itself.
 @MainActor
 final class PanelController {
     enum Mode: Equatable { case hidden, expanded, peek }
@@ -61,47 +74,165 @@ final class PanelController {
     let ui: OverlayUIState
     private let store: Store
     private var geometry: NotchGeometry
-    private var mouseMonitor: Any?
+    private var globalMouseMonitor: Any?
+    private var localMouseMonitor: Any?
     private var localKeyMonitor: Any?
     private var peekHideTask: Task<Void, Never>?
+    private var orderOutTask: Task<Void, Never>?
 
     init(store: Store) {
         self.store = store
         self.geometry = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
         self.ui = OverlayUIState()
-        ui.onSizeChange = { [weak self] size in self?.resize(to: size) }
         ui.onClose = { [weak self] in self?.hide() }
-        ui.onHoverChange = { [weak self] hovering in self?.hoverChanged(hovering) }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
-        ui.onPicked = { [weak self] in self?.focusTextField() }
-        let root = OverlayView(store: store, ui: ui)
-        let host = NSHostingView(rootView: root)
+        ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
+        let host = NSHostingView(rootView: OverlayView(store: store, ui: ui))
         host.sizingOptions = []
         panel.contentView = host
-        startNotchHoverWatch()
+        panel.ignoresMouseEvents = true
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateMouse() }
+        }
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .mouseExited]) { [weak self] event in
+            MainActor.assumeIsolated { self?.updateMouse() }
+            return event
+        }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
         }
     }
 
+    var mode: Mode { ui.mode }
+
+    func toggle() {
+        ui.mode == .expanded ? hide() : expand()
+    }
+
+    func expand() {
+        peekHideTask?.cancel()
+        store.markReplySeen()
+        let wasHidden = ui.mode == .hidden
+        if wasHidden { place(on: NotchGeometry.screenUnderMouse()) }
+        present()
+        panel.makeKey()
+        animateMode(.expanded, afterLayout: wasHidden)
+        focusTextField()
+    }
+
+    /// Shows the reply without taking focus; fades after a delay unless hovered.
+    func peek(autoHide: Bool) {
+        guard ui.mode == .hidden else { return }
+        place(on: NotchGeometry.screenUnderMouse())
+        present()
+        animateMode(.peek, afterLayout: true)
+        if autoHide { schedulePeekHide(after: 8) }
+    }
+
+    func hide() {
+        peekHideTask?.cancel()
+        withAnimation(Motion.close) {
+            ui.mode = .hidden
+            ui.pickerOpen = false
+        }
+        panel.ignoresMouseEvents = true
+        // Take the canvas away once the island has shrunk into the notch.
+        orderOutTask?.cancel()
+        orderOutTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard let self, !Task.isCancelled, self.ui.mode == .hidden else { return }
+            self.panel.orderOut(nil)
+        }
+    }
+
+    private func present() {
+        orderOutTask?.cancel()
+        panel.orderFrontRegardless()
+    }
+
+    /// Sets the mode with the open spring. From hidden, wait one runloop turn so the
+    /// collapsed island is on screen first and the spring has somewhere to start from.
+    private func animateMode(_ mode: Mode, afterLayout: Bool) {
+        let apply: @MainActor @Sendable () -> Void = { [weak self] in
+            guard let self else { return }
+            withAnimation(Motion.open) { self.ui.mode = mode }
+            self.updateMouse()
+        }
+        if afterLayout { DispatchQueue.main.async(execute: apply) } else { apply() }
+    }
+
+    private func schedulePeekHide(after seconds: Double) {
+        peekHideTask?.cancel()
+        peekHideTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard let self, !Task.isCancelled, self.ui.mode == .peek, !self.ui.hovering else { return }
+            self.hide()
+        }
+    }
+
+    private func place(on screen: NSScreen) {
+        geometry = NotchGeometry.forScreen(screen)
+        ui.notchSize = geometry.notchSize
+        ui.hasRealNotch = geometry.hasRealNotch
+        ui.maxReplyHeight = screen.frame.height * 0.4
+        // Room for the widest island, its shadow, and the tallest content.
+        let w: CGFloat = 760
+        let h = min(screen.frame.height, geometry.notchSize.height + ui.maxReplyHeight + 380)
+        panel.setFrame(NSRect(x: geometry.screenFrame.midX - w / 2, y: geometry.screenFrame.maxY - h, width: w, height: h),
+                       display: true)
+    }
+
+    // MARK: - Mouse
+
+    /// The island's rectangle in screen coordinates.
+    private var islandScreenRect: NSRect {
+        let r = ui.islandFrame // SwiftUI global space: top-left origin, in the hosting view
+        let f = panel.frame
+        return NSRect(x: f.minX + r.minX, y: f.maxY - r.maxY, width: r.width, height: r.height)
+    }
+
+    /// Lets clicks through the transparent canvas, tracks hover over the island, and
+    /// peeks when the pointer rests on the notch while an agent works.
+    private func updateMouse() {
+        let p = NSEvent.mouseLocation
+        if ui.mode == .hidden {
+            panel.ignoresMouseEvents = true
+            setHovering(false)
+            checkNotchHover(p)
+            return
+        }
+        let inside = NSMouseInRect(p, islandScreenRect.insetBy(dx: -4, dy: -4), false)
+        panel.ignoresMouseEvents = !inside
+        setHovering(inside)
+    }
+
+    private func setHovering(_ hovering: Bool) {
+        guard ui.hovering != hovering else { return }
+        ui.hovering = hovering
+        if ui.mode == .peek, !hovering { schedulePeekHide(after: 1.5) }
+        if hovering { peekHideTask?.cancel() }
+    }
+
+    private func checkNotchHover(_ p: NSPoint) {
+        guard store.isTargetActive || store.pendingRequest != nil else { return }
+        let g = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
+        if NSMouseInRect(p, g.notchRect.insetBy(dx: -8, dy: 0), false) {
+            peek(autoHide: false)
+            schedulePeekHide(after: 2.5) // stays while hovered
+        }
+    }
+
+    // MARK: - Keyboard
+
     /// SwiftUI's FocusState is unreliable in a non-activating panel, so focus the one
     /// visible text field through AppKit once SwiftUI has mounted it.
     private func focusTextField() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            guard let self, let root = self.panel.contentView else { return }
-            if let field = Self.findTextField(in: root) {
-                let ok = self.panel.makeFirstResponder(field)
-                debugLog("focus \(type(of: field)) ok=\(ok) key=\(self.panel.isKeyWindow)")
-            } else {
-                debugLog("focus: no field. tree: \(Self.describe(root, depth: 0))")
-            }
+            guard let self, let root = self.panel.contentView,
+                  let field = Self.findTextField(in: root) else { return }
+            self.panel.makeFirstResponder(field)
         }
-    }
-
-    private static func describe(_ v: NSView, depth: Int) -> String {
-        guard depth < 12 else { return "" }
-        return "\(type(of: v))[" + v.subviews.map { describe($0, depth: depth + 1) }.joined(separator: ",") + "]"
     }
 
     private static func findTextField(in view: NSView) -> NSView? {
@@ -119,11 +250,11 @@ final class PanelController {
         let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
         switch event.keyCode {
         case 53: // Esc
-            if ui.pickerOpen { ui.pickerOpen = false; focusTextField(); return true }
+            if ui.pickerOpen { setPicker(false); return true }
             if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
         case 40 where cmd: // ⌘K
-            ui.pickerOpen.toggle(); ui.pickerIndex = 0; focusTextField(); return true
+            setPicker(!ui.pickerOpen); return true
         case 47 where cmd: // ⌘.
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎
@@ -131,99 +262,25 @@ final class PanelController {
         case 36 where approval && !ui.pickerOpen && ui.draft.isEmpty: // ⏎
             Task { await store.respond(decision: "accept") }; return true
         case 125 where ui.pickerOpen: // ↓
-            ui.pickerIndex = min(ui.pickerIndex + 1, max(min(store.recentThreads.count, 10) - 1, 0)); return true
+            withAnimation(Motion.snappy) {
+                ui.pickerIndex = min(ui.pickerIndex + 1, max(min(store.recentThreads.count, 10) - 1, 0))
+            }
+            return true
         case 126 where ui.pickerOpen: // ↑
-            ui.pickerIndex = max(ui.pickerIndex - 1, 0); return true
+            withAnimation(Motion.snappy) { ui.pickerIndex = max(ui.pickerIndex - 1, 0) }
+            return true
         default:
             return false
         }
     }
 
-    var mode: Mode { ui.mode }
-
-    func toggle() {
-        ui.mode == .expanded ? hide() : expand()
-    }
-
-    func expand() {
-        peekHideTask?.cancel()
-        store.markReplySeen()
-        place(on: NotchGeometry.screenUnderMouse())
-        ui.mode = .expanded
-        panel.orderFrontRegardless()
-        panel.makeKey()
+    private func setPicker(_ open: Bool) {
+        withAnimation(Motion.content) {
+            ui.pickerOpen = open
+            ui.pickerIndex = 0
+            if !open { ui.pickerQuery = "" }
+        }
         focusTextField()
     }
-
-    /// Shows the reply without taking focus; fades after a delay unless hovered.
-    func peek(autoHide: Bool) {
-        guard ui.mode == .hidden else { return }
-        place(on: NotchGeometry.screenUnderMouse())
-        ui.mode = .peek
-        panel.orderFrontRegardless()
-        if autoHide { schedulePeekHide(after: 8) }
-    }
-
-    func hide() {
-        peekHideTask?.cancel()
-        ui.mode = .hidden
-        ui.pickerOpen = false
-        panel.orderOut(nil)
-    }
-
-    private func schedulePeekHide(after seconds: Double) {
-        peekHideTask?.cancel()
-        peekHideTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            guard let self, !Task.isCancelled, self.ui.mode == .peek, !self.ui.hovering else { return }
-            self.hide()
-        }
-    }
-
-    private func hoverChanged(_ hovering: Bool) {
-        if ui.mode == .peek, !hovering { schedulePeekHide(after: 1.5) }
-        if hovering { peekHideTask?.cancel() }
-    }
-
-    private func place(on screen: NSScreen) {
-        geometry = NotchGeometry.forScreen(screen)
-        ui.notchSize = geometry.notchSize
-        ui.hasRealNotch = geometry.hasRealNotch
-        ui.maxReplyHeight = screen.frame.height * 0.4
-        resize(to: panel.frame.size)
-    }
-
-    private func resize(to size: CGSize) {
-        let w = max(size.width, geometry.notchSize.width)
-        let h = max(size.height, geometry.notchSize.height)
-        let frame = NSRect(x: geometry.screenFrame.midX - w / 2, y: geometry.screenFrame.maxY - h, width: w, height: h)
-        if panel.frame != frame { panel.setFrame(frame, display: true) }
-    }
-
-    /// While a run is active, hovering the notch peeks at the reply. Global mouse-move
-    /// monitoring needs no Accessibility permission (only key monitoring does).
-    private func startNotchHoverWatch() {
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
-            Task { @MainActor in self?.checkNotchHover() }
-        }
-    }
-
-    private func checkNotchHover() {
-        guard ui.mode == .hidden, store.isTargetActive || store.pendingRequest != nil else { return }
-        let p = NSEvent.mouseLocation
-        let screen = NotchGeometry.screenUnderMouse()
-        let g = NotchGeometry.forScreen(screen)
-        if NSMouseInRect(p, g.notchRect.insetBy(dx: -8, dy: 0), false) {
-            peek(autoHide: false)
-            schedulePeekHide(after: 2.5) // stays while hovered
-        }
-    }
 }
 
-@MainActor func debugLog(_ s: String) {
-    let url = FrameLog.directory.appendingPathComponent("debug.log")
-    try? FileManager.default.createDirectory(at: FrameLog.directory, withIntermediateDirectories: true)
-    let line = "\(Date()) \(s)\n"
-    if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
-    else { try? line.write(to: url, atomically: true, encoding: .utf8) }
-}

@@ -6,7 +6,7 @@ import Observation
 @Observable
 @MainActor
 final class Store {
-    enum Connection: Equatable {
+    enum Connection: Hashable {
         case t3NotRunning
         case connecting
         case connected

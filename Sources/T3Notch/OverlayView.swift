@@ -7,7 +7,6 @@ final class OverlayUIState {
     var notchSize = CGSize(width: 190, height: 32)
     var hasRealNotch = false
     var maxReplyHeight: CGFloat = 360
-    var focusToken = 0
     var pickerOpen = false
     var pickerQuery = ""
     var pickerIndex = 0
@@ -15,87 +14,153 @@ final class OverlayUIState {
     var draft = ""
     /// Answers being composed for a user-input request, by question id.
     var answers: [String: String] = [:]
+    /// The island's frame in the hosting view (top-left origin), for click-through.
+    var islandFrame: CGRect = .zero
 
-    var onSizeChange: ((CGSize) -> Void)?
     var onClose: (() -> Void)?
-    var onHoverChange: ((Bool) -> Void)?
     var onRequestFocus: (() -> Void)?
-    var onPicked: (() -> Void)?
+    var onIslandFrameChange: (() -> Void)?
 }
 
+/// The island: a black shape that grows out of the notch, with glass controls inside.
 struct OverlayView: View {
     let store: Store
     @Bindable var ui: OverlayUIState
+    @Namespace private var glass
+    @Namespace private var selection
 
-    private var width: CGFloat { ui.mode == .peek ? 520 : 680 }
+    private var shown: Bool { ui.mode != .hidden }
+    private var openWidth: CGFloat { ui.mode == .peek ? 520 : 680 }
+    /// The real notch's bottom corners are about this round.
+    private var notchRadius: CGFloat { ui.hasRealNotch ? 10 : 12 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Color.clear.frame(height: max(ui.notchSize.height - 6, 0))
-            if let b = store.protocolBreak { protocolBanner(b) }
-            if store.connection != .connected {
-                connectionLine
-            } else {
-                header
-                if ui.pickerOpen && ui.mode == .expanded { picker } else {
-                    reply
-                    if let req = store.pendingRequest { requestCard(req) }
-                    if ui.mode == .expanded { input }
+        island
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .environment(\.colorScheme, .dark)
+    }
+
+    // MARK: Island
+
+    private var island: some View {
+        content
+            .frame(width: openWidth, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            // Content arrives after the shape opens and leaves before it closes.
+            .opacity(shown ? 1 : 0)
+            .blur(radius: shown ? 0 : 12)
+            .scaleEffect(shown ? 1 : 0.9, anchor: .top)
+            .animation(shown ? Motion.open.delay(0.06) : .smooth(duration: 0.16), value: shown)
+            // The shape: notch-sized when hidden, content-sized when shown.
+            .frame(width: shown ? openWidth : ui.notchSize.width,
+                   height: shown ? nil : ui.notchSize.height, alignment: .top)
+            .background(.black)
+            .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: shown ? 26 : notchRadius,
+                                              bottomTrailingRadius: shown ? 26 : notchRadius,
+                                              style: .continuous))
+            .shadow(color: .black.opacity(shown ? 0.45 : 0), radius: shown ? 24 : 0, y: shown ? 10 : 0)
+            // A drawn notch on screens without one fades rather than sitting there black.
+            .opacity(shown || ui.hasRealNotch ? 1 : 0)
+            .animation(Motion.content, value: layoutKey)
+            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame in
+                ui.islandFrame = frame
+                ui.onIslandFrameChange?()
+            }
+    }
+
+    /// Changes inside the open island that should animate its size.
+    private var layoutKey: [AnyHashable] {
+        [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
+         store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
+         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId]
+    }
+
+    private var content: some View {
+        GlassEffectContainer(spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
+                Color.clear.frame(height: max(ui.notchSize.height - 6, 0))
+                if let b = store.protocolBreak {
+                    protocolBanner(b).transition(.blurReplace.combined(with: .move(edge: .top)))
+                }
+                if store.connection != .connected {
+                    connectionLine.transition(.blurReplace)
+                } else {
+                    header
+                    if ui.pickerOpen && ui.mode == .expanded {
+                        picker.transition(.blurReplace)
+                    } else {
+                        reply.transition(.blurReplace)
+                        if let req = store.pendingRequest {
+                            requestCard(req)
+                                .transition(.blurReplace.combined(with: .scale(0.96, anchor: .top)))
+                        }
+                        if ui.mode == .expanded { input.transition(.blurReplace) }
+                    }
+                }
+                if let err = store.lastSendError {
+                    Text(err).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
+                        .transition(.blurReplace)
                 }
             }
-            if let err = store.lastSendError {
-                Text(err).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
-            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 14)
-        .frame(width: width, alignment: .leading)
-        .background(
-            UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22, style: .continuous)
-                .fill(.black)
-        )
-        .environment(\.colorScheme, .dark)
-        .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGSize.self, of: { $0.size }, action: { ui.onSizeChange?($0) })
-        .onHover { h in ui.hovering = h; ui.onHoverChange?(h) }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Focus on the next runloop turn, after the field has been mounted.
-        .onChange(of: ui.focusToken) { ui.onRequestFocus?() }
-        .onChange(of: ui.pickerOpen) { ui.onRequestFocus?() }
     }
 
     // MARK: Pieces
 
     private var connectionLine: some View {
         HStack(spacing: 8) {
-            Circle().fill(.gray).frame(width: 7, height: 7)
-            switch store.connection {
-            case .t3NotRunning: Text("T3 Code isn't running").foregroundStyle(.secondary)
-            case .connecting: Text("Connecting to T3…").foregroundStyle(.secondary)
-            case .failed(let r): Text("Can't reach T3: \(r)").foregroundStyle(.secondary).lineLimit(2)
-            case .connected: EmptyView()
-            }
+            StatusDotGlyph(indicator: .idle)
+            Text(connectionText).foregroundStyle(.secondary).lineLimit(2)
+                .contentTransition(.opacity)
         }
         .font(.callout)
+        .animation(Motion.content, value: connectionText)
+    }
+
+    private var connectionText: String {
+        switch store.connection {
+        case .t3NotRunning: return "T3 Code isn't running"
+        case .connecting: return "Connecting to T3…"
+        case .failed(let r): return "Can't reach T3: \(r)"
+        case .connected: return ""
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Circle().fill(statusColor).frame(width: 7, height: 7)
-            Text(store.targetThread?["title"].string ?? "No thread")
-                .font(.callout.weight(.semibold)).lineLimit(1)
-            if let p = store.projectTitle(for: store.targetThread) {
-                Text("· \(p)").font(.callout).foregroundStyle(.secondary).lineLimit(1)
+        let title = store.targetThread?["title"].string ?? "No thread"
+        let project = store.projectTitle(for: store.targetThread)
+        return HStack(spacing: 8) {
+            StatusDotGlyph(indicator: store.indicator == .hidden ? .idle : store.indicator)
+            Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                .contentTransition(.interpolate)
+                .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
+                .transition(.blurReplace)
+            if let project {
+                Text("· \(project)").font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    .transition(.blurReplace)
             }
             if store.overrideThreadId != nil {
-                Text("for next prompt").font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().fill(.white.opacity(0.12)))
+                Text("for next prompt").font(.caption2)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .glassEffect(.regular.tint(.blue.opacity(0.35)), in: .capsule)
+                    .transition(.blurReplace.combined(with: .scale(0.8)))
             }
             Spacer(minLength: 8)
             Text(statusLabel).font(.caption).foregroundStyle(.secondary)
-            Button { store.openTargetInT3() } label: { Image(systemName: "arrow.up.forward.square") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Open in T3")
+                .contentTransition(.opacity)
+            Button { store.openTargetInT3() } label: {
+                Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .help("Open in T3")
         }
+        .animation(Motion.content, value: title)
+        .animation(Motion.content, value: statusLabel)
+        .animation(Motion.content, value: store.overrideThreadId)
     }
 
     @ViewBuilder private var reply: some View {
@@ -106,11 +171,15 @@ struct OverlayView: View {
                         .font(.system(size: 13))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentTransition(.identity) // streamed text grows; it should not crossfade
                         .id("end")
                 }
-                .frame(maxHeight: min(ui.maxReplyHeight, ui.mode == .peek ? 220 : ui.maxReplyHeight))
+                .scrollIndicators(.never)
+                .frame(maxHeight: ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight)
                 .fixedSize(horizontal: false, vertical: true)
-                .onChange(of: r.text) { if r.streaming { proxy.scrollTo("end", anchor: .bottom) } }
+                .onChange(of: r.text) {
+                    if r.streaming { withAnimation(Motion.content) { proxy.scrollTo("end", anchor: .bottom) } }
+                }
             }
         } else if ui.mode == .expanded {
             Text("No reply yet").font(.callout).foregroundStyle(.tertiary)
@@ -123,26 +192,34 @@ struct OverlayView: View {
                 ForEach(Array(questions.enumerated()), id: \.offset) { _, q in question(q) }
                 HStack {
                     Spacer()
-                    Button("Send answers") { submitAnswers(questions) }.keyboardShortcut(.return, modifiers: .command)
+                    Button("Send answers") { submitAnswers(questions) }
+                        .buttonStyle(.glassProminent)
+                        .keyboardShortcut(.return, modifiers: .command)
                 }
             } else {
                 Text(approvalTitle(req)).font(.callout.weight(.semibold))
                 if let detail = approvalDetail(req) {
                     Text(detail).font(.system(size: 12, design: .monospaced)).lineLimit(8)
                         .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08)))
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.35)))
+                        .transition(.blurReplace)
                 }
                 HStack(spacing: 8) {
                     Button("Decline  ⎋") { Task { await store.respond(decision: "decline") } }
+                        .buttonStyle(.glass)
                     Spacer()
                     Button("For session  ⌘⏎") { Task { await store.respond(decision: "acceptForSession") } }
-                    Button("Accept  ⏎") { Task { await store.respond(decision: "accept") } }.buttonStyle(.borderedProminent)
+                        .buttonStyle(.glass)
+                    Button("Accept  ⏎") { Task { await store.respond(decision: "accept") } }
+                        .buttonStyle(.glassProminent)
+                        .tint(.orange)
                 }
                 .controlSize(.small)
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12).strokeBorder(.orange.opacity(0.6)))
+        .padding(12)
+        .glassEffect(.regular.tint(.orange.opacity(0.22)), in: .rect(cornerRadius: 18))
+        .glassEffectID("request", in: glass)
     }
 
     @ViewBuilder private func question(_ q: JSON) -> some View {
@@ -151,13 +228,15 @@ struct OverlayView: View {
             Text(q["question"].string ?? q["header"].string ?? "Question").font(.callout.weight(.semibold))
             let options = q["options"].array ?? []
             if !options.isEmpty {
-                FlowButtons(options: options.compactMap { $0["label"].string }, selected: ui.answers[id]) { label in
-                    ui.answers[id] = label
+                OptionList(options: options.compactMap { $0["label"].string }, selected: ui.answers[id]) { label in
+                    withAnimation(Motion.snappy) { ui.answers[id] = label }
                 }
             }
             if options.isEmpty || q["allowCustomAnswer"].bool == true {
                 TextField("Your answer", text: Binding(get: { ui.answers[id] ?? "" }, set: { ui.answers[id] = $0 }))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .padding(8)
+                    .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
             }
         }
     }
@@ -167,32 +246,45 @@ struct OverlayView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 14))
             .lineLimit(1...6)
-            
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.1)))
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+            .glassEffectID("field", in: glass) // morphs into the ⌘K search field
             .onSubmit(sendDraft)
+            .animation(Motion.content, value: ui.draft.isEmpty)
     }
 
     private var picker: some View {
         VStack(alignment: .leading, spacing: 4) {
             TextField("Send next prompt to…", text: $ui.pickerQuery)
                 .textFieldStyle(.plain).font(.system(size: 14))
-                .padding(8).background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.1)))
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+                .glassEffectID("field", in: glass)
                 .onSubmit { pick(index: ui.pickerIndex) }
-                .onChange(of: ui.pickerQuery) { ui.pickerIndex = 0 }
-            ForEach(Array(pickerThreads.enumerated()), id: \.offset) { i, t in
+                .onChange(of: ui.pickerQuery) { withAnimation(Motion.snappy) { ui.pickerIndex = 0 } }
+            ForEach(Array(pickerThreads.enumerated()), id: \.element["id"].string) { i, t in
                 HStack {
                     Text(t["title"].string ?? "Untitled").lineLimit(1)
                     Text(store.projectTitle(for: t) ?? "").foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
                 }
                 .font(.callout)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(i == ui.pickerIndex ? .white.opacity(0.15) : .clear))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background {
+                    // One highlight that slides between rows.
+                    if i == ui.pickerIndex {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(.white.opacity(0.14))
+                            .matchedGeometryEffect(id: "selection", in: selection)
+                    }
+                }
                 .contentShape(Rectangle())
                 .onTapGesture { pick(index: i) }
+                .transition(.blurReplace)
             }
         }
+        .animation(Motion.snappy, value: ui.pickerIndex)
+        .animation(Motion.content, value: ui.pickerQuery)
     }
 
     private func protocolBanner(_ b: Store.ProtocolBreak) -> some View {
@@ -200,13 +292,16 @@ struct OverlayView: View {
             Text("T3 protocol changed").font(.callout.weight(.semibold)).foregroundStyle(.orange)
             Text(b.reason).font(.caption).foregroundStyle(.secondary).lineLimit(3)
             HStack {
-                Button("Dismiss") { store.dismissProtocolBreak() }
+                Button("Dismiss") { withAnimation(Motion.content) { store.dismissProtocolBreak() } }
+                    .buttonStyle(.glass)
                 Spacer()
-                Button("Open fix draft in T3") { store.openFixDraft() }.buttonStyle(.borderedProminent)
+                Button("Open fix draft in T3") { store.openFixDraft() }
+                    .buttonStyle(.glassProminent).tint(.orange)
             }.controlSize(.small)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.orange.opacity(0.12)))
+        .padding(12)
+        .glassEffect(.regular.tint(.orange.opacity(0.18)), in: .rect(cornerRadius: 18))
+        .glassEffectID("banner", in: glass)
     }
 
     // MARK: Helpers
@@ -222,17 +317,19 @@ struct OverlayView: View {
     private func pick(index: Int) {
         let list = pickerThreads
         guard list.indices.contains(index) else { return }
-        store.overrideThreadId = list[index]["id"].string
-        ui.pickerOpen = false
-        ui.pickerQuery = ""
-        ui.pickerIndex = 0
-        ui.onPicked?()
+        withAnimation(Motion.content) {
+            store.overrideThreadId = list[index]["id"].string
+            ui.pickerOpen = false
+            ui.pickerQuery = ""
+            ui.pickerIndex = 0
+        }
+        ui.onRequestFocus?()
     }
 
     private func sendDraft() {
         let text = ui.draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        ui.draft = ""
+        withAnimation(Motion.content) { ui.draft = "" }
         Task { await store.send(text) }
     }
 
@@ -263,15 +360,6 @@ struct OverlayView: View {
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
     }
 
-    private var statusColor: Color {
-        if store.pendingRequest != nil { return .orange }
-        switch store.targetStatus {
-        case "running", "starting", "preparing", "queued": return .green
-        case "failed": return .red
-        default: return .gray
-        }
-    }
-
     private var statusLabel: String {
         if store.pendingRequest != nil { return "needs you" }
         let s = store.targetStatus
@@ -284,8 +372,8 @@ struct OverlayView: View {
     }
 }
 
-/// Option buttons for a question; wraps onto as many rows as needed.
-private struct FlowButtons: View {
+/// Options for a question, with a radio symbol that morphs on selection.
+private struct OptionList: View {
     let options: [String]
     let selected: String?
     let onPick: (String) -> Void
@@ -296,6 +384,7 @@ private struct FlowButtons: View {
                 Button { onPick(label) } label: {
                     HStack {
                         Image(systemName: selected == label ? "largecircle.fill.circle" : "circle")
+                            .contentTransition(.symbolEffect(.replace))
                         Text(label).multilineTextAlignment(.leading)
                         Spacer()
                     }
