@@ -409,7 +409,7 @@ final class Store {
         let streaming: Bool
         /// The agent is working and this is its reasoning or current step, not a reply.
         let thinking: Bool
-        /// Image attachments of this exchange: the reply's and the prompt's.
+        /// Image attachments of the reply.
         let images: [JSON]
     }
 
@@ -451,10 +451,9 @@ final class Store {
         }
     }
 
+    /// Images the agent attached to its reply (images it embeds in the text show inline).
     private func makeReply(_ m: JSON) -> Reply {
-        let run = m["runId"].string
-        let prompt = messages.values.filter { $0["role"].string == "user" && run != nil && $0["runId"].string == run }
-        let images = ((prompt.flatMap { $0["attachments"].array ?? [] }) + (m["attachments"].array ?? []))
+        let images = (m["attachments"].array ?? [])
             .filter { $0["type"].string == "image" && $0["id"].string != nil }
         return Reply(id: m["id"].string ?? "", text: m["text"].string ?? "", streaming: m["streaming"].bool ?? false,
                      thinking: false, images: images)

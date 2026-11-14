@@ -500,9 +500,8 @@ struct OverlayView: View {
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
         } else {
-            Text(markdown(text))
-                .font(.system(size: 13))
-                .textSelection(.enabled)
+            ReplyContent(text: text, baseDir: store.targetThread?["worktreePath"].string
+                         ?? store.projects[store.targetThread?["projectId"].string ?? ""]?["workspaceRoot"].string)
         }
     }
 

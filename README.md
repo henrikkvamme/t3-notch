@@ -20,7 +20,7 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
   when you start typing. Sending hides the island and hands focus back to the app you were in.
 - **Live replies.** While the agent works, the island shows its thinking (and, with **Show Commands While
   Working** on in settings, its current step: `$ swift test`, `Editing Store.swift`). Then the reply streams in, sliding the old one out as it blurs in.
-  Images in the exchange show as thumbnails; hover one to see it larger.
+  Images the agent puts in its reply (screenshots, charts) show in place; click one to open it.
 - **Queue or steer.** ⏎ queues your message after the running turn; ⌘⏎ steers the turn that is running.
 - **Pick the chat.** ⌘K opens a list that mirrors T3's sidebar: pinned, then active, then the rest, with
   project, status, time, branch and provider. With no chat picked, the island opens on this list.
