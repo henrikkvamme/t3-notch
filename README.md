@@ -35,7 +35,7 @@ Turn on **Launch at Login** from the menu bar icon.
 ## How it talks to T3
 
 The overlay reads `~/.t3/userdata/server-runtime.json` to find the local T3 server. On first run it
-gets a token with `t3 auth session issue --label notch-overlay` and keeps it in the Keychain. The token
+gets a token with `t3 auth session issue --label notch-overlay` and keeps it in `~/Library/Application Support/T3Notch/token` (mode 0600). It is a file rather than the Keychain because the app is ad-hoc signed: each rebuild would trigger a Keychain prompt. The token
 only has the `orchestration:read` and `orchestration:operate` scopes. To revoke it, remove it in T3.
 
 The overlay then connects to T3's internal WebSocket RPC at `/ws`. This is the same protocol T3's own

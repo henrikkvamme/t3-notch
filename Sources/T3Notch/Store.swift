@@ -45,6 +45,7 @@ final class Store {
     private(set) var subscribedThreadId: String?
     private var threadStreamId: String?
     private var shellStreamId: String?
+    private var shellSnapshotSequence: Double?
     private(set) var messages: [String: JSON] = [:]
     private(set) var runtimeRequests: [String: JSON] = [:]
     private(set) var requestItems: [String: JSON] = [:]
@@ -163,6 +164,7 @@ final class Store {
     // MARK: - Shell stream
 
     private func subscribeShell() {
+        shellSnapshotSequence = nil
         shellStreamId = rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self] item in
             self?.applyShell(item)
         }, onEnd: { [weak self] result in
@@ -178,8 +180,16 @@ final class Store {
                 reportProtocolBreak("Shell snapshot has no threads/projects arrays", raw: String(decoding: item.encoded().prefix(20_000), as: UTF8.self))
                 return
             }
-            threads = Dictionary(ts.compactMap { t in t["id"].string.map { ($0, t) } }, uniquingKeysWith: { _, b in b })
-            projects = Dictionary(ps.compactMap { p in p["id"].string.map { ($0, p) } }, uniquingKeysWith: { _, b in b })
+            // A snapshot arrives in several parts that share one sequence: merge parts,
+            // and start over only when a new sequence begins.
+            let seq = snap["snapshotSequence"].double
+            if seq != shellSnapshotSequence {
+                shellSnapshotSequence = seq
+                threads = [:]
+                projects = [:]
+            }
+            for t in ts { if let id = t["id"].string { threads[id] = t } }
+            for p in ps { if let id = p["id"].string { projects[id] = p } }
         case "thread.updated":
             guard let t = item["thread"].object, let id = t["id"]?.string else { return }
             let old = threads[id]

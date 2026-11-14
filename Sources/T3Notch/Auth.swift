@@ -1,40 +1,34 @@
 import Foundation
-import Security
 
-/// Holds the overlay's T3 bearer token in the Keychain and mints a new one with the
-/// `t3` CLI when it is missing or rejected. Revoke it in T3 under the label below.
+/// Holds the overlay's T3 bearer token and mints a new one with the `t3` CLI when it is
+/// missing or rejected. Revoke it in T3 under the label below.
+///
+/// The token lives in a 0600 file rather than the Keychain: the app is ad-hoc signed, so
+/// every rebuild changes its signature and the Keychain would prompt for access each time.
+/// T3 keeps its own secrets the same way, under ~/.t3/userdata/secrets.
 enum Auth {
     static let label = "notch-overlay"
-    private static let service = "\(BuildInfo.bundleId).token"
+
+    private static var tokenFile: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/T3Notch/token")
+    }
 
     static func storedToken() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard let s = try? String(contentsOf: tokenFile, encoding: .utf8) else { return nil }
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
     }
 
     static func store(_ token: String) {
-        let base: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-        ]
-        SecItemDelete(base as CFDictionary)
-        var add = base
-        add[kSecValueData as String] = Data(token.utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        let fm = FileManager.default
+        let dir = tokenFile.deletingLastPathComponent()
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        fm.createFile(atPath: tokenFile.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600])
     }
 
     static func clear() {
-        SecItemDelete([kSecClass as String: kSecClassGenericPassword,
-                       kSecAttrService as String: service] as CFDictionary)
+        try? FileManager.default.removeItem(at: tokenFile)
     }
 
     /// Runs `t3 auth session issue` with the narrowest scopes the overlay needs.

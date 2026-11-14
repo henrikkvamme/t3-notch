@@ -72,6 +72,8 @@ final class PanelController {
         ui.onSizeChange = { [weak self] size in self?.resize(to: size) }
         ui.onClose = { [weak self] in self?.hide() }
         ui.onHoverChange = { [weak self] hovering in self?.hoverChanged(hovering) }
+        ui.onRequestFocus = { [weak self] in self?.focusTextField() }
+        ui.onPicked = { [weak self] in self?.focusTextField() }
         let root = OverlayView(store: store, ui: ui)
         let host = NSHostingView(rootView: root)
         host.sizingOptions = []
@@ -83,17 +85,45 @@ final class PanelController {
         }
     }
 
+    /// SwiftUI's FocusState is unreliable in a non-activating panel, so focus the one
+    /// visible text field through AppKit once SwiftUI has mounted it.
+    private func focusTextField() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, let root = self.panel.contentView else { return }
+            if let field = Self.findTextField(in: root) {
+                let ok = self.panel.makeFirstResponder(field)
+                debugLog("focus \(type(of: field)) ok=\(ok) key=\(self.panel.isKeyWindow)")
+            } else {
+                debugLog("focus: no field. tree: \(Self.describe(root, depth: 0))")
+            }
+        }
+    }
+
+    private static func describe(_ v: NSView, depth: Int) -> String {
+        guard depth < 12 else { return "" }
+        return "\(type(of: v))[" + v.subviews.map { describe($0, depth: depth + 1) }.joined(separator: ",") + "]"
+    }
+
+    private static func findTextField(in view: NSView) -> NSView? {
+        for sub in view.subviews {
+            if let tf = sub as? NSTextField, tf.isEditable, !tf.isHidden { return tf }
+            if let tv = sub as? NSTextView, tv.isEditable, !tv.isHidden { return tv }
+            if let found = findTextField(in: sub) { return found }
+        }
+        return nil
+    }
+
     /// Overlay shortcuts. Returns true when the key was handled.
     private func handleKey(_ event: NSEvent) -> Bool {
         let cmd = event.modifierFlags.contains(.command)
         let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
         switch event.keyCode {
         case 53: // Esc
-            if ui.pickerOpen { ui.pickerOpen = false; return true }
+            if ui.pickerOpen { ui.pickerOpen = false; focusTextField(); return true }
             if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
         case 40 where cmd: // ⌘K
-            ui.pickerOpen.toggle(); ui.pickerIndex = 0; return true
+            ui.pickerOpen.toggle(); ui.pickerIndex = 0; focusTextField(); return true
         case 47 where cmd: // ⌘.
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎
@@ -119,9 +149,9 @@ final class PanelController {
         peekHideTask?.cancel()
         place(on: NotchGeometry.screenUnderMouse())
         ui.mode = .expanded
-        ui.focusToken += 1
         panel.orderFrontRegardless()
         panel.makeKey()
+        focusTextField()
     }
 
     /// Shows the reply without taking focus; fades after a delay unless hovered.
@@ -187,4 +217,12 @@ final class PanelController {
             schedulePeekHide(after: 2.5) // stays while hovered
         }
     }
+}
+
+@MainActor func debugLog(_ s: String) {
+    let url = FrameLog.directory.appendingPathComponent("debug.log")
+    try? FileManager.default.createDirectory(at: FrameLog.directory, withIntermediateDirectories: true)
+    let line = "\(Date()) \(s)\n"
+    if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+    else { try? line.write(to: url, atomically: true, encoding: .utf8) }
 }

@@ -19,13 +19,13 @@ final class OverlayUIState {
     var onSizeChange: ((CGSize) -> Void)?
     var onClose: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
+    var onRequestFocus: (() -> Void)?
+    var onPicked: (() -> Void)?
 }
 
 struct OverlayView: View {
     let store: Store
     @Bindable var ui: OverlayUIState
-    @FocusState private var inputFocused: Bool
-    @FocusState private var pickerFocused: Bool
 
     private var width: CGFloat { ui.mode == .peek ? 520 : 680 }
 
@@ -59,10 +59,9 @@ struct OverlayView: View {
         .onGeometryChange(for: CGSize.self, of: { $0.size }, action: { ui.onSizeChange?($0) })
         .onHover { h in ui.hovering = h; ui.onHoverChange?(h) }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onChange(of: ui.focusToken) { inputFocused = true }
-        .onChange(of: ui.pickerOpen) { _, open in
-            if open { pickerFocused = true } else { inputFocused = true }
-        }
+        // Focus on the next runloop turn, after the field has been mounted.
+        .onChange(of: ui.focusToken) { ui.onRequestFocus?() }
+        .onChange(of: ui.pickerOpen) { ui.onRequestFocus?() }
     }
 
     // MARK: Pieces
@@ -168,7 +167,7 @@ struct OverlayView: View {
             .textFieldStyle(.plain)
             .font(.system(size: 14))
             .lineLimit(1...6)
-            .focused($inputFocused)
+            
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.1)))
             .onSubmit(sendDraft)
@@ -177,9 +176,10 @@ struct OverlayView: View {
     private var picker: some View {
         VStack(alignment: .leading, spacing: 4) {
             TextField("Send next prompt to…", text: $ui.pickerQuery)
-                .textFieldStyle(.plain).font(.system(size: 14)).focused($pickerFocused)
+                .textFieldStyle(.plain).font(.system(size: 14))
                 .padding(8).background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.1)))
                 .onSubmit { pick(index: ui.pickerIndex) }
+                .onChange(of: ui.pickerQuery) { ui.pickerIndex = 0 }
             ForEach(Array(pickerThreads.enumerated()), id: \.offset) { i, t in
                 HStack {
                     Text(t["title"].string ?? "Untitled").lineLimit(1)
@@ -226,6 +226,7 @@ struct OverlayView: View {
         ui.pickerOpen = false
         ui.pickerQuery = ""
         ui.pickerIndex = 0
+        ui.onPicked?()
     }
 
     private func sendDraft() {
