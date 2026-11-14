@@ -62,3 +62,10 @@ active by `activeOrderKey`, then settled or snoozed ones by latest activity. Row
 2. Fix the client against what changed.
 3. Update `BuildInfo.swift`.
 4. Run `make install` and confirm that the menu bar shows "Connected".
+
+## Recording the demo
+
+`T3Notch --demo --demo-shots <dir>` (from `.build/release/`) runs a scripted tour on a fake desktop with fake
+chats, showing each shortcut as keycaps bottom-right, saves stills to `<dir>`, and quits (~41s). It never
+connects to T3. Quit the installed app first, record the screen meanwhile (`screencapture -v -V 46 demo.mov`),
+then trim to the fake desktop and encode `docs/demo.mp4` and `docs/demo.gif`. The script is in `Demo.swift`.

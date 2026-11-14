@@ -8,6 +8,10 @@ beside the notch shows the chat's status.
 It is a small native Swift app (SwiftUI and AppKit, no dependencies) that talks to the T3 Code desktop app
 running on the same Mac.
 
+![T3 Notch demo: open the island, pick a chat, send, clip the screen, and answer an approval](docs/demo.gif)
+
+The keys being pressed show in the bottom-right corner. [Watch the full-quality video](docs/demo.mp4).
+
 ## Features
 
 - **Prompt from anywhere.** ⌥Space opens the island over any app, fullscreen ones included. The input appears
@@ -24,6 +28,33 @@ running on the same Mac.
 - **Hand off to T3.** ⌘O opens the chat in T3 and carries your draft text and clips into T3's chat box.
 - **Status dot.** While the island is hidden, a dot right of the notch shows the chat's state. It hides while
   an app is fullscreen.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/island.png" alt="The island open on a chat, showing its latest reply"></td>
+    <td><img src="docs/screenshots/chats.png" alt="The ⌘K chat list, mirroring T3's sidebar"></td>
+  </tr>
+  <tr>
+    <td align="center">The island on a chat</td>
+    <td align="center">⌘K: pick the chat</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/typing.png" alt="Typing a prompt; the input appears as you type"></td>
+    <td><img src="docs/screenshots/reply.png" alt="A finished reply popping up from the notch"></td>
+  </tr>
+  <tr>
+    <td align="center">The input appears as you type</td>
+    <td align="center">A finished reply pops up</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/clip.png" alt="Clipping: a code function highlighted on the frozen screen"></td>
+    <td><img src="docs/screenshots/approval.png" alt="An approval request with Decline, For session and Accept"></td>
+  </tr>
+  <tr>
+    <td align="center">⌘P: clip an element of the screen</td>
+    <td align="center">Answer approvals in place</td>
+  </tr>
+</table>
 
 ![Status dot states](docs/status-dot.png)
 

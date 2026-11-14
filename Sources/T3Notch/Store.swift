@@ -38,9 +38,23 @@ final class Store {
 
     /// The chat prompts go to, picked in the ⌘K list. There is no default: with none (or
     /// once it is archived or deleted), opening the island shows the list. Kept across launches.
-    var focusedThreadId: String? = UserDefaults.standard.string(forKey: "focusedThreadId") {
-        didSet { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId"); syncThreadSubscription() }
+    var focusedThreadId: String? = Store.demo ? nil : UserDefaults.standard.string(forKey: "focusedThreadId") {
+        didSet {
+            if !Store.demo { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId") }
+            syncThreadSubscription()
+        }
     }
+
+    // MARK: - Demo mode (`T3Notch --demo`, see Demo.swift)
+
+    /// Demo mode: no T3 connection; a script feeds fake chats in and receives sends.
+    nonisolated(unsafe) static var demo = false
+    var onDemoSend: ((String, Bool, Int) -> Void)?
+    var onDemoRespond: ((String) -> Void)?
+
+    func demoConnect() { connection = .connected }
+    func demoApply(_ item: JSON) { applyShell(item) }
+    func demoSetRequestItem(_ requestId: String, _ item: JSON) { requestItems[requestId] = item }
 
     // The subscribed thread's live detail.
     private(set) var subscribedThreadId: String?
@@ -87,6 +101,7 @@ final class Store {
 
     /// Watches `server-runtime.json` and connects while T3 runs.
     func start() {
+        guard !Store.demo else { return }
         checkPresence()
         presenceTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkPresence() }
@@ -439,6 +454,10 @@ final class Store {
             if threads.isEmpty { reconnectNow() }
             return
         }
+        if Store.demo {
+            onDemoSend?(trimmed, steer, images.count)
+            return
+        }
         let id = UUID().uuidString.lowercased()
         lastSendError = nil
         var command: [String: JSON] = [
@@ -491,6 +510,7 @@ final class Store {
 
     func respond(decision: String) async {
         guard let req = pendingRequest, let threadId = targetThreadId else { return }
+        if Store.demo { onDemoRespond?(decision); return }
         await dispatch(["type": "runtime-request.respond", "commandId": .string(UUID().uuidString.lowercased()),
                         "threadId": .string(threadId), "requestId": .string(req.id), "decision": .string(decision)])
     }
@@ -585,7 +605,7 @@ final class Store {
 enum Settings {
     /// Pop the island open when the focused chat's run ends. On by default.
     static var showWhenChatFinishes: Bool {
-        get { UserDefaults.standard.object(forKey: "showWhenChatFinishes") as? Bool ?? true }
+        get { Store.demo || (UserDefaults.standard.object(forKey: "showWhenChatFinishes") as? Bool ?? true) }
         set { UserDefaults.standard.set(newValue, forKey: "showWhenChatFinishes") }
     }
 }

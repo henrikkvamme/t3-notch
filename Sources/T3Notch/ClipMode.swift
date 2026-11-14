@@ -36,8 +36,24 @@ final class ClipController {
     /// (possibly none) when the mode ends; `onFailure` if capture is not allowed.
     /// Captures the screens and shows the overlay; calls `onFinish` with the clips taken
     /// (possibly none). The caller checks Screen Recording first (see `Permission`).
+    /// The running clipping session, for the demo script.
+    static weak var current: ClipController?
+
+    // Demo hooks: a scripted pointer, element chain, scroll and click.
+    func demoHover(pointer: CGPoint, chain: [CGRect]) {
+        state.pointer = pointer
+        state.setChain(chain)
+    }
+    func demoScroll(_ step: Int) {
+        let top = max(state.chain.count - 1, 0)
+        let current = state.depth < 0 ? -1 : min(state.depth, top)
+        state.depth = min(max(current + step, -1), top)
+    }
+    func demoClick() { if let h = state.highlight { add(h) } }
+
     static func start(depth: Int, onFinish: @escaping ([Clip], Int) -> Void) -> ClipController {
         let controller = ClipController(onFinish: onFinish)
+        current = controller
         controller.state.depth = depth
         Task { await controller.begin() }
         return controller
@@ -103,6 +119,7 @@ final class ClipController {
     }
 
     private func hover(_ p: CGPoint) {
+        guard !Store.demo else { return } // the demo script drives the pointer
         state.pointer = p
         probe.probe(at: p) { [weak self] chain in
             self?.state.setChain(chain)

@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: Hotkey!
     private var statusItem: NSStatusItem!
     private var statusDot: StatusDotController!
+    private var demo: DemoController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(store: store)
@@ -20,6 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusDot = StatusDotController(store: store, ui: panel.ui) { [weak self] in self?.panel.expand() }
         store.start()
         setUpStatusItem()
+        if Store.demo {
+            demo = DemoController(panel: panel, store: store)
+            demo?.run()
+        }
         setUpEditMenu()
     }
 
@@ -111,6 +116,8 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dots"), CommandLine.ar
     MainActor.assumeIsolated { DotPreview.render(to: CommandLine.arguments[i + 1]) }
     exit(0)
 }
+
+if CommandLine.arguments.contains("--demo") { Store.demo = true }
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)

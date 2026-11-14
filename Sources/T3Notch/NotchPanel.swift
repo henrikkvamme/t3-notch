@@ -188,7 +188,7 @@ final class PanelController {
     private func returnFocus() {
         guard panel.isKeyWindow else { return }
         panel.resignKey()
-        previousApp?.activate()
+        if !Store.demo { previousApp?.activate() } // the demo stage stays in front
     }
 
     /// Hides the island. `returnFocus: false` when another app is about to take focus
@@ -391,7 +391,7 @@ final class PanelController {
         }
     }
 
-    private func movePicker(by step: Int) {
+    func movePicker(by step: Int) {
         let last = max(ui.pickerCount - 1, 0)
         ui.pickerIndex = min(max(ui.pickerIndex + step, 0), last) // the highlight animates itself
     }
@@ -402,7 +402,7 @@ final class PanelController {
         withAnimation(Motion.snappy) { ui.replyScroll.scrollTo(y: y) }
     }
 
-    private func sendDraft(steer: Bool) {
+    func sendDraft(steer: Bool) {
         let text = ui.draft
         let images = ui.clips.map(\.png)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
@@ -419,7 +419,7 @@ final class PanelController {
     /// ⌘P. Without Screen Recording, show the permission buttons and start on its own once
     /// it is granted. Without Accessibility, clip anyway (hover picks whole windows) and
     /// offer that button afterwards.
-    private func startClipping() {
+    func startClipping() {
         guard clipper == nil else { return }
         guard Permission.screenRecording.isGranted else {
             clipWhenAllowed = true
@@ -474,7 +474,19 @@ final class PanelController {
         }
     }
 
-    private func setPicker(_ open: Bool) {
+    /// Picks the highlighted chat in the open list (what ⏎ does there).
+    func pickHighlighted() {
+        let rows = store.pickerRows(query: ui.pickerQuery)
+        guard rows.indices.contains(ui.pickerIndex) else { return }
+        withAnimation(Motion.content) {
+            store.focusedThreadId = rows[ui.pickerIndex]["id"].string
+            ui.pickerOpen = false
+            ui.pickerQuery = ""
+        }
+        focusTextField()
+    }
+
+    func setPicker(_ open: Bool) {
         withAnimation(Motion.content) {
             ui.pickerOpen = open
             // Start on the focused chat, so ⏎ keeps it.
