@@ -32,6 +32,67 @@ final class StatusDotController {
         }
         observe()
         watchFullscreen()
+        watchHover()
+    }
+
+    // MARK: Tooltip
+
+    private let tip = NotchPanel()
+    private let tipModel = TooltipModel()
+    private var hoverTask: Task<Void, Never>?
+    private var hovering = false
+
+    /// After half a second over the dot, a small glass label fades in below it. Drawn by
+    /// the app because system tooltips rarely show for an app that is not in front.
+    private func watchHover() {
+        tip.allowsKey = false
+        tip.ignoresMouseEvents = true
+        tip.level = .statusBar + 2
+        tip.contentView = NSHostingView(rootView: TooltipView(model: tipModel, text: "Click to show · Right-click for settings"))
+        let check: () -> Void = { [weak self] in self?.pointerMoved() }
+        NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { _ in MainActor.assumeIsolated(check) }
+        NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown]) { e in
+            MainActor.assumeIsolated {
+                if e.type == .mouseMoved { check() } else { self.hideTip() } // a click dismisses it
+            }
+            return e
+        }
+    }
+
+    private func pointerMoved() {
+        let over = !panel.ignoresMouseEvents && NSMouseInRect(NSEvent.mouseLocation, panel.frame, false)
+        guard over != hovering else { return }
+        hovering = over
+        hoverTask?.cancel()
+        if over {
+            hoverTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(550))
+                guard let self, !Task.isCancelled, self.hovering else { return }
+                self.showTip()
+            }
+        } else {
+            hideTip()
+        }
+    }
+
+    private func showTip() {
+        let size = CGSize(width: 280, height: 40)
+        let dot = panel.frame
+        tip.setFrame(NSRect(x: dot.midX - size.width / 2, y: dot.minY - size.height - 2, width: size.width, height: size.height),
+                     display: false)
+        tip.orderFrontRegardless()
+        withAnimation(Motion.snappy) { tipModel.shown = true }
+    }
+
+    private func hideTip() {
+        hoverTask?.cancel()
+        guard tipModel.shown else { return }
+        withAnimation(.easeOut(duration: 0.15)) { tipModel.shown = false }
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard let self, !self.tipModel.shown else { return }
+            self.tip.orderOut(nil)
+        }
     }
 
     // MARK: Fullscreen
@@ -158,7 +219,6 @@ private struct StatusDotView: View {
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
             .onTapGesture(perform: onClick)
-            .help(store.targetThread?["title"].string ?? "T3")
     }
 }
 
@@ -270,5 +330,29 @@ enum Spaces {
         guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
               let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue() else { return nil }
         return CFUUIDCreateString(nil, uuid) as String
+    }
+}
+
+@Observable
+@MainActor
+final class TooltipModel {
+    var shown = false
+}
+
+private struct TooltipView: View {
+    let model: TooltipModel
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .glassEffect(.regular.tint(.black.opacity(0.55)), in: .capsule)
+            .opacity(model.shown ? 1 : 0)
+            .scaleEffect(model.shown ? 1 : 0.85, anchor: .top)
+            .offset(y: model.shown ? 0 : -4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .environment(\.colorScheme, .dark)
     }
 }
