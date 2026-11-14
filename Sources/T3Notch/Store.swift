@@ -427,11 +427,17 @@ final class Store {
         `packages/contracts/src/orchestrationV2.ts` and `rpc.ts` between commit \(BuildInfo.builtAgainstT3Commit) \
         and the running version, fix the client, update BuildInfo.swift, then run `make install` and check it connects.
         """
-        var comps = URLComponents(string: "https://app.t3.codes/new")!
+        var comps = URLComponents(string: "\(Self.appScheme)://new")!
         comps.queryItems = [URLQueryItem(name: "prompt", value: String(prompt.prefix(7900))),
                             URLQueryItem(name: "repo", value: BuildInfo.repo)]
         if let url = comps.url { NSWorkspace.shared.open(url) }
     }
+
+    /// The desktop app's own URL scheme. Links with it go straight to the app instead of
+    /// through app.t3.codes in the browser. T3 parses them in `promptLinkAppPath`
+    /// (`packages/shared/src/promptLinks.ts`): `t3code://new?prompt=…&repo=…` and
+    /// `t3code://threads/<environmentId>/<threadId>`.
+    static let appScheme = "t3code"
 
     /// Opens the target thread in T3.
     func openTargetInT3() {
@@ -439,7 +445,11 @@ final class Store {
             if let pid = runtime?.pid { NSRunningApplication(processIdentifier: pid)?.activate() }
             return
         }
-        let env = environmentId ?? ""
-        if let url = URL(string: "https://app.t3.codes/threads/\(env)/\(id)") { NSWorkspace.shared.open(url) }
+        // Thread ids can contain ":" (e.g. "mcp:…"), so encode each path segment.
+        let segment = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/:"))) ?? s }
+        if let env = environmentId,
+           let url = URL(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))") {
+            NSWorkspace.shared.open(url)
+        }
     }
 }

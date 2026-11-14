@@ -40,7 +40,7 @@ only has the `orchestration:read` and `orchestration:operate` scopes. To revoke 
 
 The overlay then connects to T3's internal WebSocket RPC at `/ws`. This is the same protocol T3's own
 UI uses. It is not a public API, so a T3 update can break it. When that happens, the overlay shows
-**T3 protocol changed**. Click **Open fix draft in T3** to open a T3 draft prompt in this repo. The
+**T3 protocol changed**. Click **Open fix draft in T3** to open a T3 draft prompt in this repo (via the desktop app's `t3code://new` link, so no browser tab). The
 draft has the frame log and the T3 versions, so an agent can fix the client.
 
 See [AGENTS.md](AGENTS.md) for how the client is built.
