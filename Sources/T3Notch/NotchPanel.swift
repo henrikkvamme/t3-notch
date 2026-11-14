@@ -62,6 +62,8 @@ enum Motion {
     static let content = Animation.smooth(duration: 0.32)
     /// Small elements: dot, selection, buttons.
     static let snappy = Animation.snappy(duration: 0.28)
+    /// List selection: fast and nearly critically damped, so it feels instant.
+    static let select = Animation.spring(response: 0.16, dampingFraction: 0.9)
 }
 
 /// Shows, hides and animates the island. The panel is a fixed canvas top-centred on the
@@ -322,7 +324,7 @@ final class PanelController {
 
     private func movePicker(by step: Int) {
         let last = max(ui.pickerCount - 1, 0)
-        withAnimation(Motion.snappy) { ui.pickerIndex = min(max(ui.pickerIndex + step, 0), last) }
+        ui.pickerIndex = min(max(ui.pickerIndex + step, 0), last) // the highlight animates itself
     }
 
     /// Scrolls the reply by about four lines per press.

@@ -37,7 +37,8 @@ struct OverlayView: View {
     let store: Store
     @Bindable var ui: OverlayUIState
     @Namespace private var glass
-    @Namespace private var selection
+    /// Each picker row's frame, so the selection highlight can slide between them.
+    @State private var rowFrames: [Int: CGRect] = [:]
 
     private var shown: Bool { ui.mode != .hidden }
     private var openWidth: CGFloat { ui.mode == .peek ? 520 : 680 }
@@ -298,35 +299,40 @@ struct OverlayView: View {
 
     private var picker: some View {
         VStack(alignment: .leading, spacing: 4) {
-            TextField("Send next prompt to…", text: $ui.pickerQuery)
+            TextField("", text: $ui.pickerQuery)
                 .textFieldStyle(.plain).font(.system(size: 14))
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
                 .glassEffectID("field", in: glass)
                 .onSubmit { pick(index: ui.pickerIndex) }
-                .onChange(of: ui.pickerQuery) { withAnimation(Motion.snappy) { ui.pickerIndex = 0 } }
-            ForEach(Array(pickerThreads.enumerated()), id: \.element["id"].string) { i, t in
-                HStack {
-                    Text(t["title"].string ?? "Untitled").lineLimit(1)
-                    Text(store.projectTitle(for: t) ?? "").foregroundStyle(.secondary).lineLimit(1)
-                    Spacer()
-                }
-                .font(.callout)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background {
-                    // One highlight that slides between rows.
-                    if i == ui.pickerIndex {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(.white.opacity(0.14))
-                            .matchedGeometryEffect(id: "selection", in: selection)
+                .onChange(of: ui.pickerQuery) { ui.pickerIndex = 0 }
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(pickerThreads.enumerated()), id: \.element["id"].string) { i, t in
+                    HStack {
+                        Text(t["title"].string ?? "Untitled").lineLimit(1)
+                        Text(store.projectTitle(for: t) ?? "").foregroundStyle(.secondary).lineLimit(1)
+                        Spacer()
                     }
+                    .font(.callout)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .contentShape(Rectangle())
+                    .onTapGesture { pick(index: i) }
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pickerRows")) }) { rowFrames[i] = $0 }
+                    .transition(.blurReplace)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { pick(index: i) }
-                .transition(.blurReplace)
+            }
+            .coordinateSpace(.named("pickerRows"))
+            .background(alignment: .topLeading) {
+                // One highlight that slides to the selected row on a quick spring.
+                if let f = rowFrames[ui.pickerIndex] {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(.white.opacity(0.14))
+                        .frame(width: f.width, height: f.height)
+                        .offset(x: f.minX, y: f.minY)
+                        .animation(Motion.select, value: f)
+                }
             }
         }
-        .animation(Motion.snappy, value: ui.pickerIndex)
         .animation(Motion.content, value: ui.pickerQuery)
         .onChange(of: pickerThreads.count, initial: true) { _, n in ui.pickerCount = n }
     }
