@@ -267,7 +267,6 @@ struct OverlayView: View {
             .font(.system(size: 14))
             .lineLimit(1...6)
             .padding(.horizontal, 14).padding(.vertical, 10)
-            }
             .glassEffect(typing ? .regular.interactive() : .identity, in: .rect(cornerRadius: 16))
             .glassEffectID("field", in: glass) // morphs into the ⌘K search field
             .frame(height: typing ? nil : 0, alignment: .top)
