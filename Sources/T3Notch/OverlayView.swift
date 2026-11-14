@@ -198,7 +198,7 @@ struct OverlayView: View {
                     .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
                     .transition(.blurReplace)
                 if let project {
-                    Text("· \(project)").font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    Text(project).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                         .transition(.blurReplace)
                 }
             }
