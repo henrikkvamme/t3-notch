@@ -420,7 +420,10 @@ final class Store {
         if subscribedThreadId == targetThreadId {
             if isTargetActive, let run = targetThread?["activeRunId"].string ?? targetThread?["latestRunId"].string {
                 let reply = assistantMessages.filter { $0["runId"].string == run }.max { Self.started($0) < Self.started($1) }
-                let step = activityItems.values.filter { $0["runId"].string == run }.max { Self.started($0) < Self.started($1) }
+                // Thinking only, unless the setting also shows commands and other tool steps.
+                let step = activityItems.values
+                    .filter { $0["runId"].string == run && (Settings.showToolSteps || $0["type"].string == "reasoning") }
+                    .max { Self.started($0) < Self.started($1) }
                 if let reply, step.map({ Self.started(reply) >= Self.started($0) }) ?? true {
                     return makeReply(reply)
                 }
@@ -695,6 +698,13 @@ final class Store {
 
 /// User settings, kept in UserDefaults.
 enum Settings {
+    /// While the agent works, also show its commands and tool steps, not only its thinking.
+    /// Off by default: commands can be long.
+    static var showToolSteps: Bool {
+        get { UserDefaults.standard.bool(forKey: "showToolSteps") }
+        set { UserDefaults.standard.set(newValue, forKey: "showToolSteps") }
+    }
+
     /// Pop the island open when the focused chat's run ends. On by default.
     static var showWhenChatFinishes: Bool {
         get { Store.demo || (UserDefaults.standard.object(forKey: "showWhenChatFinishes") as? Bool ?? true) }

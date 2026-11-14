@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(FrameLog.directory)
     }
     @objc private func toggleShowWhenFinished() { Settings.showWhenChatFinishes.toggle() }
+    @objc private func toggleToolSteps() { Settings.showToolSteps.toggle() }
     @objc private func toggleDot() { panel.ui.dotHiddenByUser.toggle() }
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
@@ -108,6 +109,8 @@ extension AppDelegate: NSMenuDelegate {
         dot.state = panel.ui.dotHiddenByUser ? .on : .off
         dot.keyEquivalent = " "
         dot.keyEquivalentModifierMask = [.option, .shift]
+        let steps = add(menu, "Show Commands While Working", #selector(toggleToolSteps))
+        steps.state = Settings.showToolSteps ? .on : .off
         let finish = add(menu, "Show When Chat Finishes", #selector(toggleShowWhenFinished))
         finish.state = Settings.showWhenChatFinishes ? .on : .off
         let login = add(menu, "Launch at Login", #selector(toggleLogin))
