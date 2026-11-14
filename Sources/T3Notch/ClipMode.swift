@@ -61,7 +61,8 @@ final class ClipController {
             panel.contentView = FirstClickHostingView(rootView: ClipOverlayView(
                 state: state, screenRect: rect, image: image,
                 onHover: { [weak self] p in self?.hover(p) },
-                onAdd: { [weak self] r in self?.add(r) }))
+                onAdd: { [weak self] r in self?.add(r) },
+                onRemove: { [weak self] i in self?.remove(i) }))
             panel.orderFrontRegardless()
             windows.append(panel)
         }
@@ -117,6 +118,15 @@ final class ClipController {
         if !NSEvent.modifierFlags.contains(.shift) { finish() }
     }
 
+    /// Removes a saved clip and stays in clipping mode.
+    private func remove(_ index: Int) {
+        guard state.added.indices.contains(index), state.clips.indices.contains(index) else { return }
+        withAnimation(Motion.snappy) {
+            state.added.remove(at: index)
+            state.clips.remove(at: index)
+        }
+    }
+
     private func finish() {
         guard !finished else { return }
         finished = true
@@ -159,8 +169,15 @@ final class ClipState {
     var clips: [Clip] = []
     private var scrollAccumulator: CGFloat = 0
 
+    /// The saved clip under the pointer (newest wins), which a click removes.
+    var hoveredSaved: Int? {
+        guard drag == nil, let p = pointer else { return nil }
+        return added.lastIndex { $0.contains(p) }
+    }
+
     var highlight: CGRect? {
         if let drag { return drag }
+        if let i = hoveredSaved { return added[i] }
         guard !chain.isEmpty else { return nil }
         return chain[min(depth, chain.count - 1)]
     }
@@ -322,7 +339,7 @@ private struct ClipOverlayView: View {
     let image: CGImage?
     let onHover: (CGPoint) -> Void
     let onAdd: (CGRect) -> Void
-    @State private var dragStart: CGPoint?
+    let onRemove: (Int) -> Void
 
     var body: some View {
         let highlight = state.highlight.map(local)
@@ -367,9 +384,19 @@ private struct ClipOverlayView: View {
                     .offset(x: shape.minX, y: shape.minY)
                     .allowsHitTesting(false)
             }
+            if state.active, let i = state.hoveredSaved {
+                let l = local(state.added[i])
+                Image(systemName: "xmark").font(.system(size: 12, weight: .bold))
+                    .frame(width: 28, height: 28)
+                    .glassEffect(.regular, in: .circle)
+                    .position(x: l.midX, y: l.midY)
+                    .allowsHitTesting(false)
+                    .transition(.blurReplace.combined(with: .scale(0.6)))
+            }
         }
         .frame(width: screenRect.width, height: screenRect.height, alignment: .topLeading)
         .animation(Motion.select, value: state.highlight)
+        .animation(Motion.snappy, value: state.hoveredSaved)
         .animation(Motion.content, value: state.active)
         .contentShape(Rectangle())
         .onContinuousHover(coordinateSpace: .local) { phase in
@@ -389,6 +416,8 @@ private struct ClipOverlayView: View {
                     if let d = state.drag {
                         state.drag = nil
                         onAdd(d)
+                    } else if let i = state.hoveredSaved {
+                        onRemove(i) // a click on a saved clip removes it
                     } else if let h = state.highlight {
                         onAdd(h) // a click adds the highlighted element
                     }
