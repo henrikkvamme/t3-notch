@@ -18,6 +18,8 @@ final class OverlayUIState {
     var answers: [String: String] = [:]
     /// The island's frame in the hosting view (top-left origin), for click-through.
     var islandFrame: CGRect = .zero
+    /// An app is fullscreen on the notch screen; the status dot hides.
+    var notchScreenFullscreen = false
     /// The reply's scroll position, so ⌃J/⌃K can scroll it from the keyboard.
     var replyScroll = ScrollPosition(edge: .top)
     var replyOffset: CGFloat = 0

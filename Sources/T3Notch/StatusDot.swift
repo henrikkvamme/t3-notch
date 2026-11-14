@@ -29,11 +29,63 @@ final class StatusDotController {
             MainActor.assumeIsolated { self?.place() }
         }
         observe()
+        watchFullscreen()
+    }
+
+    // MARK: Fullscreen
+
+    private var fullscreenTimer: Timer?
+
+    /// Re-checks on space and app switches (entering fullscreen moves to a new space),
+    /// and every 2s as a fallback for apps that fill the screen without a new space.
+    private func watchFullscreen() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.checkFullscreen()
+                    // The fullscreen animation takes a moment; look again once it settles.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.checkFullscreen() }
+                }
+            }
+        }
+        fullscreenTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkFullscreen() }
+        }
+        checkFullscreen()
+    }
+
+    private func checkFullscreen() {
+        let now = Self.isFullscreen(on: Self.notchScreen)
+        if ui.notchScreenFullscreen != now { ui.notchScreenFullscreen = now }
+    }
+
+    /// True when a normal window of another app covers the whole screen, menu-bar strip
+    /// included. Window bounds are readable without Screen Recording permission.
+    private static func isFullscreen(on screen: NSScreen) -> Bool {
+        guard let primary = NSScreen.screens.first,
+              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return false }
+        // CoreGraphics window coordinates have their origin at the primary screen's top-left.
+        let target = CGRect(x: screen.frame.minX, y: primary.frame.maxY - screen.frame.maxY,
+                            width: screen.frame.width, height: screen.frame.height)
+        let me = ProcessInfo.processInfo.processIdentifier
+        return list.contains { w in
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowOwnerPID as String] as? Int32) != me,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let rect = CGRect(dictionaryRepresentation: b as CFDictionary) else { return false }
+            return abs(rect.minX - target.minX) < 1 && abs(rect.minY - target.minY) < 1
+                && rect.width >= target.width - 1 && rect.height >= target.height - 1
+        }
+    }
+
+    private static var notchScreen: NSScreen {
+        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
     private func place() {
-        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
-        let notch = NotchGeometry.forScreen(screen).notchRect
+        let notch = NotchGeometry.forScreen(Self.notchScreen).notchRect
         panel.setFrame(NSRect(x: notch.maxX, y: notch.minY, width: Self.width, height: notch.height), display: true)
     }
 
@@ -60,7 +112,7 @@ private struct StatusDotView: View {
 
     /// No dot while the island is open: the island's own header shows the status.
     static func effective(store: Store, ui: OverlayUIState) -> Store.Indicator {
-        ui.mode == .hidden ? store.indicator : .hidden
+        ui.mode == .hidden && !ui.notchScreenFullscreen ? store.indicator : .hidden
     }
 
     @State private var hovering = false
