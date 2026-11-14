@@ -160,7 +160,7 @@ final class ClipState {
     var frozen: [Frozen] = []
     /// Element frames under the pointer, smallest first.
     var chain: [CGRect] = []
-    /// How many steps up the chain the highlight is.
+    /// How many steps up the chain the highlight is; −1 means the whole window.
     var depth = 0
     var drag: CGRect?
     /// Where the pointer is (global), for the dot cursor.
@@ -179,6 +179,7 @@ final class ClipState {
         if let drag { return drag }
         if let i = hoveredSaved { return added[i] }
         guard !chain.isEmpty else { return nil }
+        if depth < 0 { return chain.last } // −1: the whole window
         return chain[min(depth, chain.count - 1)]
     }
 
@@ -203,13 +204,11 @@ final class ClipState {
             guard e.scrollingDeltaY != 0 else { return }
             step = e.scrollingDeltaY > 0 ? 1 : -1
         }
+        // Levels: −1 is the window (its own level, below the smallest element), then
+        // 0 … top from the smallest element outwards. Scrolling stops at both ends.
         let top = max(chain.count - 1, 0)
-        let current = min(depth, top)
-        if current == 0 && step < 0 {
-            depth = .max // past the smallest level: the window, whatever element is under you
-        } else {
-            depth = min(max(current + step, 0), top)
-        }
+        let current = depth < 0 ? -1 : min(depth, top)
+        depth = min(max(current + step, -1), top)
     }
 
     /// Crops a global rect out of the frozen frame of the screen it is mostly on.
