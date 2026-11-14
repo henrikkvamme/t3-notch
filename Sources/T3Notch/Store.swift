@@ -61,7 +61,8 @@ final class Store {
     enum Indicator: Equatable { case hidden, idle, running, needsYou, failed, done }
 
     var indicator: Indicator {
-        guard connection == .connected, targetThread != nil else { return .hidden }
+        // Always at least a grey dot, so the overlay can be opened with the mouse.
+        guard connection == .connected, targetThread != nil else { return protocolBreak != nil ? .needsYou : .idle }
         if pendingRequest != nil || protocolBreak != nil { return .needsYou }
         if isTargetActive { return .running }
         if targetStatus == "failed" { return .failed }

@@ -108,8 +108,8 @@ struct StatusDotGlyph: View {
 enum DotPreview {
     static func render(to path: String) {
         let states: [(Store.Indicator, String)] = [
-            (.idle, "Idle"), (.running, "Running (pulses)"), (.needsYou, "Needs you"),
-            (.failed, "Failed"), (.done, "Reply you haven't seen"), (.hidden, "Hidden (overlay open / T3 off)"),
+            (.idle, "Idle, or no chat / T3 off"), (.running, "Running (pulses)"), (.needsYou, "Needs you"),
+            (.failed, "Failed"), (.done, "Reply you haven't seen"), (.hidden, "Hidden (overlay open)"),
         ]
         let view = VStack(alignment: .leading, spacing: 14) {
             ForEach(Array(states.enumerated()), id: \.offset) { _, s in
