@@ -26,6 +26,7 @@ final class OverlayUIState {
     var replyTextHeight: CGFloat = 0
 
     var onClose: (() -> Void)?
+    var onOpenInT3: (() -> Void)?
     var onRequestFocus: (() -> Void)?
     /// Typing started or stopped; the controller shows or hides the text cursor.
     var onTypingChange: ((Bool) -> Void)?
@@ -171,7 +172,7 @@ struct OverlayView: View {
                 // Negative spacing keeps the circles 6pt apart while their larger hit areas touch.
                 HStack(spacing: -6) {
                     headerButton("minus") { ui.onClose?() }
-                    headerButton("arrow.up.forward") { store.openTargetInT3() }
+                    headerButton("arrow.up.forward") { ui.onOpenInT3?() }
                 }
             }
             // Lay out as the 22pt circles; the extra hit area overhangs without moving anything.

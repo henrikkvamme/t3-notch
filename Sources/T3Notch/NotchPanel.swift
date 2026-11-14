@@ -89,6 +89,7 @@ final class PanelController {
         self.geometry = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
         self.ui = OverlayUIState()
         ui.onClose = { [weak self] in self?.hide() }
+        ui.onOpenInT3 = { [weak self] in self?.openInT3() }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
@@ -150,6 +151,12 @@ final class PanelController {
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
     }
 
+    /// Opens the thread in T3 (which takes focus) and hides the island.
+    func openInT3() {
+        hide(returnFocus: false)
+        store.openTargetInT3()
+    }
+
     /// Gives keyboard focus back to the app you were in, if the island had taken it.
     private func returnFocus() {
         guard panel.isKeyWindow else { return }
@@ -157,9 +164,11 @@ final class PanelController {
         previousApp?.activate()
     }
 
-    func hide() {
+    /// Hides the island. `returnFocus: false` when another app is about to take focus
+    /// anyway (opening the thread in T3), so the two activations don't fight.
+    func hide(returnFocus shouldReturn: Bool = true) {
         peekHideTask?.cancel()
-        returnFocus()
+        if shouldReturn { returnFocus() } else { panel.resignKey() }
         withAnimation(Motion.close) {
             ui.mode = .hidden
             ui.pickerOpen = false
@@ -308,8 +317,8 @@ final class PanelController {
             hide(); return true
         case 40 where cmd: // ⌘K
             setPicker(!ui.pickerOpen); return true
-        case 31 where cmd: // ⌘O opens the thread in T3
-            store.openTargetInT3(); return true
+        case 31 where cmd: // ⌘O opens the thread in T3 and hides the island
+            openInT3(); return true
         case 47 where cmd: // ⌘.
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎
