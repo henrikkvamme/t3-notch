@@ -527,16 +527,9 @@ struct OverlayView: View {
         .disabled(installing)
     }
 
-    /// A 22pt glass circle inside a 34pt hit area.
+    /// A bare icon inside a 34pt hit area; it brightens under the pointer.
     private func headerButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 11, weight: .semibold))
-                .frame(width: 22, height: 22)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .padding(6)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        HeaderIcon(symbol: symbol, action: action)
     }
 
     private func markdown(_ s: String) -> AttributedString {
@@ -642,5 +635,25 @@ private struct ReplyImages: View {
         .clipShape(shape)
         .overlay(shape.strokeBorder(.white.opacity(0.15)))
         .animation(Motion.content, value: store.attachmentImages[id] != nil)
+    }
+}
+
+/// A header icon with no background: grey, white under the pointer.
+private struct HeaderIcon: View {
+    let symbol: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(hovering ? .primary : .secondary)
+                .frame(width: 22, height: 22)
+                .padding(6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Motion.snappy, value: hovering)
     }
 }

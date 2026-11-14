@@ -104,7 +104,19 @@ final class Hotkey {
         self.binding = binding
         Self.installHandlerOnce()
         Self.handlers[id] = action
-        _ = register(binding)
+        if !register(binding) { retryRegistration() }
+    }
+
+    /// At launch the previous copy of the app may still hold the shortcut for a moment
+    /// (a quick restart or update): keep trying for about ten seconds.
+    private func retryRegistration() {
+        Task { [weak self] in
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, self.ref == nil else { return }
+                if self.register(self.binding) { return }
+            }
+        }
     }
 
     /// Switches to a new combination. Returns false, keeping the old one, when macOS or
