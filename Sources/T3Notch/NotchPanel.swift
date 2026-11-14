@@ -321,6 +321,8 @@ final class PanelController {
             setPicker(!ui.pickerOpen); return true
         case 31 where cmd: // ⌘O opens the thread in T3 and hides the island
             openInT3(); return true
+        case 35 where cmd: // ⌘P enters clipping mode
+            startClipping(); return true
         case 47 where cmd: // ⌘.
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎
@@ -371,9 +373,34 @@ final class PanelController {
 
     private func sendDraft(steer: Bool) {
         let text = ui.draft
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        withAnimation(Motion.content) { ui.draft = "" }
-        Task { await store.send(text, steer: steer) }
+        let images = ui.clips.map(\.png)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = [] }
+        Task { await store.send(text, steer: steer, images: images) }
+    }
+
+    // MARK: - Clipping
+
+    private var clipper: ClipController?
+
+    /// ⌘P: hide the island at once (so it is not in the frozen frame), clip, then come back.
+    private func startClipping() {
+        guard clipper == nil else { return }
+        orderOutTask?.cancel()
+        ui.mode = .hidden
+        ui.pickerOpen = false
+        panel.ignoresMouseEvents = true
+        panel.orderOut(nil)
+        clipper = ClipController.start(onFinish: { [weak self] clips in
+            guard let self else { return }
+            self.clipper = nil
+            self.ui.clips += clips
+            self.expand()
+        }, onFailure: { [weak self] message in
+            self?.store.lastSendError = message
+            self?.clipper = nil
+            self?.expand()
+        })
     }
 
     private func setPicker(_ open: Bool) {

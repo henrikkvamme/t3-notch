@@ -14,6 +14,8 @@ final class OverlayUIState {
     var pickerCount = 0
     var hovering = false
     var draft = ""
+    /// Screen clips waiting to go with the next message.
+    var clips: [Clip] = []
     /// Answers being composed for a user-input request, by question id.
     var answers: [String: String] = [:]
     /// The island's frame in the hosting view (top-left origin), for click-through.
@@ -86,7 +88,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId]
+         store.latestReply?.text.count, store.targetThreadId, store.overrideThreadId, ui.clips.count]
     }
 
     private var content: some View {
@@ -112,6 +114,9 @@ struct OverlayView: View {
                                 }
                             }
                             // The input takes no space, spacing included, until you type.
+                            if ui.mode == .expanded && !ui.clips.isEmpty {
+                                clipRow.padding(.top, 10).transition(.blurReplace)
+                            }
                             if ui.mode == .expanded {
                                 input.padding(.top, ui.draft.isEmpty ? 0 : 10).transition(.blurReplace)
                             }
@@ -385,9 +390,10 @@ struct OverlayView: View {
 
     private func sendDraft() {
         let text = ui.draft
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        withAnimation(Motion.content) { ui.draft = "" }
-        Task { await store.send(text) }
+        let images = ui.clips.map(\.png)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = [] }
+        Task { await store.send(text, images: images) }
     }
 
     private func submitAnswers(_ questions: [JSON]) {
@@ -415,6 +421,24 @@ struct OverlayView: View {
         let parts = [item?["prompt"].string, item?["reason"].string, item?["title"].string, item?["input"].string]
             .compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    /// Clips waiting to be sent; click one to remove it.
+    private var clipRow: some View {
+        HStack(spacing: 8) {
+            ForEach(ui.clips) { clip in
+                Image(nsImage: clip.thumbnail)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 64, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.15)))
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation(Motion.content) { ui.clips.removeAll { $0.id == clip.id } } }
+                    .transition(.blurReplace.combined(with: .scale(0.8)))
+            }
+        }
+        .animation(Motion.content, value: ui.clips)
     }
 
     /// A 22pt glass circle inside a 34pt hit area.

@@ -404,9 +404,9 @@ final class Store {
     /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
     /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
     /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
-    func send(_ text: String, steer: Bool = false) async {
+    func send(_ text: String, steer: Bool = false, images: [Data] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !images.isEmpty else { return }
         guard let threadId = targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
@@ -434,12 +434,36 @@ final class Store {
             command["deliveryIntent"] = "steer"
         }
         do {
+            if !images.isEmpty {
+                command["attachments"] = try await uploadImages(images, threadId: threadId, messageId: id)
+            }
             _ = try await rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = threadId
         } catch {
             handleCommandError(error)
         }
         syncThreadSubscription()
+    }
+
+    /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
+    /// the attachment records `message.dispatch` takes.
+    private func uploadImages(_ images: [Data], threadId: String, messageId: String) async throws -> JSON {
+        let uploads: [JSON] = images.enumerated().map { i, png in
+            [
+                "type": "image",
+                "name": .string("clip-\(i + 1).png"),
+                "mimeType": "image/png",
+                "sizeBytes": .number(Double(png.count)),
+                "dataUrl": .string("data:image/png;base64," + png.base64EncodedString()),
+            ]
+        }
+        let result = try await rpc.call("assets.persistChatAttachments", [
+            "threadId": .string(threadId), "messageId": .string(messageId), "attachments": .array(uploads),
+        ])
+        guard let attachments = result["attachments"].array else {
+            throw AppError.protocolMismatch("persistChatAttachments returned no attachments")
+        }
+        return .array(attachments)
     }
 
     func respond(decision: String) async {
