@@ -22,6 +22,8 @@ final class OverlayUIState {
     var replyScroll = ScrollPosition(edge: .top)
     var replyOffset: CGFloat = 0
     var replyMaxOffset: CGFloat = 0
+    /// The reply text's laid-out height; the scroll area is sized to it (up to a cap).
+    var replyTextHeight: CGFloat = 0
 
     var onClose: (() -> Void)?
     var onRequestFocus: (() -> Void)?
@@ -95,12 +97,19 @@ struct OverlayView: View {
                     if ui.pickerOpen && ui.mode == .expanded {
                         picker.transition(.blurReplace)
                     } else {
-                        reply.transition(.blurReplace)
-                        if let req = store.pendingRequest {
-                            requestCard(req)
-                                .transition(.blurReplace.combined(with: .scale(0.96, anchor: .top)))
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                reply.transition(.blurReplace)
+                                if let req = store.pendingRequest {
+                                    requestCard(req)
+                                        .transition(.blurReplace.combined(with: .scale(0.96, anchor: .top)))
+                                }
+                            }
+                            // The input takes no space, spacing included, until you type.
+                            if ui.mode == .expanded {
+                                input.padding(.top, ui.draft.isEmpty ? 0 : 10).transition(.blurReplace)
+                            }
                         }
-                        if ui.mode == .expanded { input.transition(.blurReplace) }
                     }
                 }
                 if let err = store.lastSendError {
@@ -154,18 +163,15 @@ struct OverlayView: View {
                     .transition(.blurReplace.combined(with: .scale(0.8)))
             }
             Spacer(minLength: 8)
-            Text(statusLabel).font(.caption).foregroundStyle(.secondary)
-                .contentTransition(.opacity)
             Button { store.openTargetInT3() } label: {
                 Image(systemName: "arrow.up.forward").font(.system(size: 11, weight: .semibold))
                     .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .circle)
-            .help("Open in T3")
+            .help("Open in T3  ⌘O")
         }
         .animation(Motion.content, value: title)
-        .animation(Motion.content, value: statusLabel)
         .animation(Motion.content, value: store.overrideThreadId)
     }
 
@@ -177,6 +183,7 @@ struct OverlayView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentTransition(.identity) // streamed text grows; it should not crossfade
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { ui.replyTextHeight = $0 }
             }
             .scrollIndicators(.never)
             .scrollPosition($ui.replyScroll)
@@ -186,8 +193,8 @@ struct OverlayView: View {
                 ui.replyOffset = v[0]
                 ui.replyMaxOffset = v[1]
             }
-            .frame(maxHeight: ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight)
-            .fixedSize(horizontal: false, vertical: true)
+            // Exactly the text's height, capped; a ScrollView's own ideal height can go stale.
+            .frame(height: min(ui.replyTextHeight, ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight))
             .onChange(of: r.text) {
                 if r.streaming { withAnimation(Motion.content) { ui.replyScroll.scrollTo(edge: .bottom) } }
             }
@@ -251,24 +258,33 @@ struct OverlayView: View {
         }
     }
 
+    /// The input stays out of sight until you type: it is mounted (so it holds keyboard
+    /// focus) but collapsed to nothing, then springs open with the first character.
     private var input: some View {
-        TextField("Message \(store.targetThread?["title"].string ?? "thread")…", text: $ui.draft, axis: .vertical)
+        let typing = !ui.draft.isEmpty
+        return TextField("", text: $ui.draft, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.system(size: 14))
             .lineLimit(1...6)
             .padding(.horizontal, 14).padding(.vertical, 10)
             .overlay(alignment: .bottomTrailing) {
-                // While the agent works, ⏎ queues and ⌘⏎ steers; say so once there is text.
-                if store.isTargetActive && !ui.draft.isEmpty {
+                // While the agent works, ⏎ queues and ⌘⏎ steers.
+                if store.isTargetActive && typing {
                     Text("⏎ queue · ⌘⏎ steer").font(.caption2).foregroundStyle(.tertiary)
                         .padding(.trailing, 12).padding(.bottom, 8)
                         .transition(.blurReplace)
                 }
             }
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+            .glassEffect(typing ? .regular.interactive() : .identity, in: .rect(cornerRadius: 16))
             .glassEffectID("field", in: glass) // morphs into the ⌘K search field
+            .frame(height: typing ? nil : 0, alignment: .top)
+            .clipped()
+            .opacity(typing ? 1 : 0)
+            .blur(radius: typing ? 0 : 6)
+            .scaleEffect(typing ? 1 : 0.96, anchor: .top)
+            .tint(typing ? .accentColor : .clear) // no stray cursor while collapsed
             .onSubmit(sendDraft)
-            .animation(Motion.content, value: ui.draft.isEmpty)
+            .animation(Motion.open, value: typing)
             .animation(Motion.content, value: store.isTargetActive)
     }
 
@@ -378,12 +394,6 @@ struct OverlayView: View {
         let parts = [item?["prompt"].string, item?["reason"].string, item?["title"].string, item?["input"].string]
             .compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
-    }
-
-    private var statusLabel: String {
-        if store.pendingRequest != nil { return "needs you" }
-        let s = store.targetStatus
-        return s == "idle" || s == "completed" ? "" : s
     }
 
     private func markdown(_ s: String) -> AttributedString {

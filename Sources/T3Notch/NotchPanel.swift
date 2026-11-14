@@ -259,6 +259,8 @@ final class PanelController {
             hide(); return true
         case 40 where cmd: // ⌘K
             setPicker(!ui.pickerOpen); return true
+        case 31 where cmd: // ⌘O opens the thread in T3
+            store.openTargetInT3(); return true
         case 47 where cmd: // ⌘.
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎

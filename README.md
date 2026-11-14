@@ -14,6 +14,7 @@ reply streams in above the input.
 | ⌘⏎ (approval showing) | Accept the approval for this session |
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Send the next prompt to another thread |
+| ⌘O | Open the thread in T3 |
 | ⌘. | Stop the running agent |
 | ⌃J ⌃N / ⌃K ⌃P | Move down / up in the ⌘K picker, or scroll the reply |
 
