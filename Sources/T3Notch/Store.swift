@@ -182,6 +182,7 @@ final class Store {
     private func subscribeShell() {
         threads = [:]
         projects = [:]
+        shellVersion &+= 1
         shellStreamId = rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self] item in
             self?.applyShell(item)
         }, onEnd: { [weak self] result in
@@ -216,6 +217,7 @@ final class Store {
         default:
             break // "synchronized", "snapshot-required", or a kind added later
         }
+        shellVersion &+= 1
         syncThreadSubscription()
     }
 
@@ -234,6 +236,31 @@ final class Store {
     /// Every top-level chat in T3's sidebar order: pinned, then active, then settled or
     /// snoozed ones by latest activity (as T3's settled list).
     var sidebarThreads: [JSON] {
+        // Sorting ~hundreds of chats is costly; redo it only after the shell changed.
+        if let cached = sidebarCache, cached.version == shellVersion { return cached.rows }
+        let rows = computeSidebarThreads()
+        sidebarCache = (shellVersion, rows)
+        return rows
+    }
+
+    /// The ⌘K list for a search text, cached per shell change and query.
+    func pickerRows(query: String) -> [JSON] {
+        let q = query.lowercased()
+        if let cached = pickerCache, cached.version == shellVersion, cached.query == q { return cached.rows }
+        let rows = Array(sidebarThreads.filter { t in
+            q.isEmpty || (t["title"].string ?? "").lowercased().contains(q)
+                || (projectTitle(for: t) ?? "").lowercased().contains(q)
+        }.prefix(60))
+        pickerCache = (shellVersion, q, rows)
+        return rows
+    }
+
+    /// Bumped on every shell change; views that read the chat list depend on it.
+    private(set) var shellVersion = 0
+    @ObservationIgnored private var sidebarCache: (version: Int, rows: [JSON])?
+    @ObservationIgnored private var pickerCache: (version: Int, query: String, rows: [JSON])?
+
+    private func computeSidebarThreads() -> [JSON] {
         let candidates = threads.values.filter {
             $0["lineage"]["parentThreadId"].isNull && $0["deletedAt"].isNull && $0["archivedAt"].isNull
         }

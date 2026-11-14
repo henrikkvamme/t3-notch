@@ -45,13 +45,19 @@ enum JSON: Codable, Sendable, Equatable {
     var object: [String: JSON]? { if case .object(let o) = self { return o }; return nil }
     var isNull: Bool { if case .null = self { return true }; return false }
 
-    /// Milliseconds since epoch for ISO-8601 strings or numeric epoch-ms values.
+    /// Milliseconds since epoch for ISO-8601 strings or numeric epoch-ms values. Parsed dates
+    /// are cached: sorting the chat list compares the same timestamps many times, and
+    /// ISO8601DateFormatter is slow.
     var epochMs: Double? {
         if let n = double { return n }
         guard let s = string else { return nil }
-        return JSON.iso.date(from: s).map { $0.timeIntervalSince1970 * 1000 }
-            ?? JSON.isoNoFrac.date(from: s).map { $0.timeIntervalSince1970 * 1000 }
+        return JSON.epochCache.value(for: s) {
+            JSON.iso.date(from: s).map { $0.timeIntervalSince1970 * 1000 }
+                ?? JSON.isoNoFrac.date(from: s).map { $0.timeIntervalSince1970 * 1000 }
+        }
     }
+
+    private static let epochCache = EpochCache()
 
     nonisolated(unsafe) private static let iso: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -60,8 +66,20 @@ enum JSON: Codable, Sendable, Equatable {
     }()
     nonisolated(unsafe) private static let isoNoFrac = ISO8601DateFormatter()
 
+    /// Parses with JSONSerialization, several times faster than a Codable decode of this enum.
     static func parse(_ data: Data) throws -> JSON {
-        try JSONDecoder().decode(JSON.self, from: data)
+        JSON(any: try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]))
+    }
+
+    init(any value: Any) {
+        switch value {
+        case let n as NSNumber:
+            self = CFGetTypeID(n) == CFBooleanGetTypeID() ? .bool(n.boolValue) : .number(n.doubleValue)
+        case let s as String: self = .string(s)
+        case let a as [Any]: self = .array(a.map(JSON.init(any:)))
+        case let o as [String: Any]: self = .object(o.mapValues(JSON.init(any:)))
+        default: self = .null
+        }
     }
 
     func encoded() -> Data {
@@ -76,4 +94,22 @@ extension JSON: ExpressibleByStringLiteral, ExpressibleByDictionaryLiteral, Expr
     }
     init(arrayLiteral elements: JSON...) { self = .array(elements) }
     init(booleanLiteral value: Bool) { self = .bool(value) }
+}
+
+/// A small thread-safe memo of ISO timestamp → epoch ms.
+final class EpochCache: @unchecked Sendable {
+    private var values: [String: Double] = [:]
+    private let lock = NSLock()
+
+    func value(for key: String, compute: () -> Double?) -> Double? {
+        lock.lock()
+        if let v = values[key] { lock.unlock(); return v }
+        lock.unlock()
+        guard let v = compute() else { return nil }
+        lock.lock()
+        if values.count > 50_000 { values.removeAll() }
+        values[key] = v
+        lock.unlock()
+        return v
+    }
 }

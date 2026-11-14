@@ -101,7 +101,7 @@ final class RPCClient {
     private func sendFrame(_ frame: JSON) {
         guard let task else { return }
         let text = String(decoding: frame.encoded(), as: UTF8.self)
-        log.record(direction: "->", text)
+        log.record(direction: "->", Data(text.utf8))
         task.send(.string(text)) { [weak self] error in
             guard let error else { return }
             Task { @MainActor in self?.finish(reason: "send failed: \(error.localizedDescription)") }
@@ -117,27 +117,33 @@ final class RPCClient {
                     return
                 }
                 guard let self, self.task === task else { return }
+                let data: Data
                 switch message {
-                case .string(let s): self.handle(text: s)
-                case .data(let d): self.handle(text: String(decoding: d, as: UTF8.self))
-                @unknown default: break
+                case .string(let s): data = Data(s.utf8)
+                case .data(let d): data = d
+                @unknown default: continue
                 }
+                // Parse off the main thread (thread snapshots run to megabytes); frames are
+                // still handled one at a time, in order.
+                let parsed = await Task.detached(priority: .userInitiated) { try? JSON.parse(data) }.value
+                self.handle(data: data, json: parsed)
             }
         }
     }
 
-    private func handle(text: String) {
+    private func handle(data: Data, json: JSON?) {
         lastReceivedAt = Date()
-        log.record(direction: "<-", text)
-        guard let json = try? JSON.parse(Data(text.utf8)) else {
-            onProtocolError?("Server frame is not JSON", text)
+        log.record(direction: "<-", data)
+        guard let json else {
+            onProtocolError?("Server frame is not JSON", String(decoding: data.prefix(20_000), as: UTF8.self))
             return
         }
         // The server may batch several messages into one frame.
-        for frame in json.array ?? [json] { handle(frame: frame, raw: text) }
+        for frame in json.array ?? [json] { handle(frame: frame, raw: data) }
     }
 
-    private func handle(frame: JSON, raw: String) {
+    private func handle(frame: JSON, raw data: Data) {
+        let raw = String(decoding: data.prefix(20_000), as: UTF8.self)
         switch frame["_tag"].string {
         case "Chunk":
             guard let id = frame["requestId"].string else { return }
@@ -191,9 +197,14 @@ final class FrameLog {
     private let limit = 200
     private let perFrameLimit = 20_000
 
-    func record(direction: String, _ text: String) {
-        let clipped = text.count > perFrameLimit ? String(text.prefix(perFrameLimit)) + "…[clipped \(text.count) chars]" : text
-        frames.append("\(ISO8601DateFormatter().string(from: Date())) \(direction) \(clipped)")
+    private let stamp = ISO8601DateFormatter()
+
+    /// Cheap per frame: clips by bytes (counting characters of a megabyte string is slow).
+    func record(direction: String, _ data: Data) {
+        let clipped = data.count > perFrameLimit
+            ? String(decoding: data.prefix(perFrameLimit), as: UTF8.self) + "…[clipped \(data.count) bytes]"
+            : String(decoding: data, as: UTF8.self)
+        frames.append("\(stamp.string(from: Date())) \(direction) \(clipped)")
         if frames.count > limit { frames.removeFirst(frames.count - limit) }
     }
 

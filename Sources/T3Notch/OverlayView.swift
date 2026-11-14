@@ -12,6 +12,8 @@ final class OverlayUIState {
     var pickerIndex = 0
     /// How many rows the picker shows after filtering, so key navigation stays in range.
     var pickerCount = 0
+    /// Each picker row's frame, so the selection highlight can slide between them.
+    var pickerRowFrames: [Int: CGRect] = [:]
     var hovering = false
     var draft = ""
     /// Screen clips waiting to go with the next message.
@@ -60,8 +62,6 @@ struct OverlayView: View {
     let store: Store
     @Bindable var ui: OverlayUIState
     @Namespace private var glass
-    /// Each picker row's frame, so the selection highlight can slide between them.
-    @State private var rowFrames: [Int: CGRect] = [:]
     /// The clip thumbnail under the pointer, which shows a preview and a remove mark.
     @State private var hoveredClip: UUID?
 
@@ -328,49 +328,7 @@ struct OverlayView: View {
     }
 
     private var picker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            TextField("", text: $ui.pickerQuery)
-                .textFieldStyle(.plain).font(.system(size: 14))
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
-                .glassEffectID("field", in: glass)
-                .onSubmit { pick(index: ui.pickerIndex) }
-                .onChange(of: ui.pickerQuery) { ui.pickerIndex = 0 }
-            let rows = pickerThreads
-            let now = Date()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(rows.enumerated()), id: \.element["id"].string) { i, t in
-                            ThreadRow(thread: t, project: store.projects[t["projectId"].string ?? ""], now: now)
-                                .contentShape(Rectangle())
-                                .onTapGesture { pick(index: i) }
-                                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pickerRows")) }) { rowFrames[i] = $0 }
-                                .id(i)
-                                .transition(.blurReplace)
-                        }
-                    }
-                    .coordinateSpace(.named("pickerRows"))
-                    .background(alignment: .topLeading) {
-                        // One highlight that slides to the selected row on a quick spring.
-                        if let f = rowFrames[ui.pickerIndex] {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(.white.opacity(0.12))
-                                .frame(width: f.width, height: f.height)
-                                .offset(x: f.minX, y: f.minY)
-                                .animation(Motion.select, value: f)
-                        }
-                    }
-                }
-                .scrollIndicators(.never)
-                .frame(height: min(pickerListHeight, ui.maxReplyHeight))
-                .onChange(of: ui.pickerIndex) { _, i in
-                    withAnimation(Motion.select) { proxy.scrollTo(i) }
-                }
-            }
-        }
-        .animation(Motion.content, value: ui.pickerQuery)
-        .onChange(of: pickerThreads.count, initial: true) { _, n in ui.pickerCount = n }
+        ChatPicker(store: store, ui: ui, glass: glass, onPick: pick(index:))
     }
 
     private func protocolBanner(_ b: Store.ProtocolBreak) -> some View {
@@ -392,24 +350,8 @@ struct OverlayView: View {
 
     // MARK: Helpers
 
-    /// Chats in T3's sidebar order, filtered by the search text.
-    var pickerThreads: [JSON] {
-        let q = ui.pickerQuery.lowercased()
-        return Array(store.sidebarThreads.filter { t in
-            q.isEmpty || (t["title"].string ?? "").lowercased().contains(q)
-                || (store.projectTitle(for: t) ?? "").lowercased().contains(q)
-        }.prefix(60))
-    }
-
-    /// The rows' measured height, so the list is only as tall as its content.
-    private var pickerListHeight: CGFloat {
-        let count = pickerThreads.count
-        guard count > 0 else { return 0 }
-        return (0..<count).compactMap { rowFrames[$0]?.maxY }.max() ?? CGFloat(count) * 62
-    }
-
     private func pick(index: Int) {
-        let list = pickerThreads
+        let list = store.pickerRows(query: ui.pickerQuery)
         guard list.indices.contains(index) else { return }
         withAnimation(Motion.content) {
             store.focusedThreadId = list[index]["id"].string
