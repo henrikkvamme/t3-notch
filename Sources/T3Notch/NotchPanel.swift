@@ -246,6 +246,10 @@ final class PanelController {
 
     /// Overlay shortcuts. Returns true when the key was handled.
     private func handleKey(_ event: NSEvent) -> Bool {
+        if let step = Self.vimStep(event) {
+            if ui.pickerOpen { movePicker(by: step) } else { scrollReply(by: step) }
+            return true
+        }
         let cmd = event.modifierFlags.contains(.command)
         let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
         switch event.keyCode {
@@ -262,16 +266,34 @@ final class PanelController {
         case 36 where approval && !ui.pickerOpen && ui.draft.isEmpty: // ⏎
             Task { await store.respond(decision: "accept") }; return true
         case 125 where ui.pickerOpen: // ↓
-            withAnimation(Motion.snappy) {
-                ui.pickerIndex = min(ui.pickerIndex + 1, max(min(store.recentThreads.count, 10) - 1, 0))
-            }
-            return true
+            movePicker(by: 1); return true
         case 126 where ui.pickerOpen: // ↑
-            withAnimation(Motion.snappy) { ui.pickerIndex = max(ui.pickerIndex - 1, 0) }
-            return true
+            movePicker(by: -1); return true
         default:
             return false
         }
+    }
+
+    /// ⌃J / ⌃N move down, ⌃K / ⌃P move up. Returns nil for any other key.
+    private static func vimStep(_ event: NSEvent) -> Int? {
+        let mods = event.modifierFlags.intersection([.control, .command, .option, .shift])
+        guard mods == .control else { return nil }
+        switch event.keyCode {
+        case 38, 45: return 1   // j, n
+        case 40, 35: return -1  // k, p
+        default: return nil
+        }
+    }
+
+    private func movePicker(by step: Int) {
+        let last = max(ui.pickerCount - 1, 0)
+        withAnimation(Motion.snappy) { ui.pickerIndex = min(max(ui.pickerIndex + step, 0), last) }
+    }
+
+    /// Scrolls the reply by about four lines per press.
+    private func scrollReply(by step: Int) {
+        let y = min(max(ui.replyOffset + CGFloat(step) * 64, 0), ui.replyMaxOffset)
+        withAnimation(Motion.snappy) { ui.replyScroll.scrollTo(y: y) }
     }
 
     private func setPicker(_ open: Bool) {

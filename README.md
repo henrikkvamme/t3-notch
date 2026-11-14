@@ -14,6 +14,7 @@ reply streams in above the input.
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Send the next prompt to another thread |
 | ⌘. | Stop the running agent |
+| ⌃J ⌃N / ⌃K ⌃P | Move down / up in the ⌘K picker, or scroll the reply |
 
 - **Target thread**: the thread at the top of T3's sidebar. That is the top pinned thread, or the top active thread when nothing is pinned. ⌘K picks another thread for one prompt.
 - **Status dot**: while the overlay is hidden, a dot right of the notch shows the target thread: grey idle (also shown with no chat or when T3 is off), pulsing green running, orange needs you, red failed, blue check for a reply you haven't seen. Click it to open the overlay.

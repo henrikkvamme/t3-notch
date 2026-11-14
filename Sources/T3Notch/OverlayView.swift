@@ -10,12 +10,18 @@ final class OverlayUIState {
     var pickerOpen = false
     var pickerQuery = ""
     var pickerIndex = 0
+    /// How many rows the picker shows after filtering, so key navigation stays in range.
+    var pickerCount = 0
     var hovering = false
     var draft = ""
     /// Answers being composed for a user-input request, by question id.
     var answers: [String: String] = [:]
     /// The island's frame in the hosting view (top-left origin), for click-through.
     var islandFrame: CGRect = .zero
+    /// The reply's scroll position, so ⌃J/⌃K can scroll it from the keyboard.
+    var replyScroll = ScrollPosition(edge: .top)
+    var replyOffset: CGFloat = 0
+    var replyMaxOffset: CGFloat = 0
 
     var onClose: (() -> Void)?
     var onRequestFocus: (() -> Void)?
@@ -165,21 +171,25 @@ struct OverlayView: View {
 
     @ViewBuilder private var reply: some View {
         if let r = store.latestReply {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(markdown(r.text))
-                        .font(.system(size: 13))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentTransition(.identity) // streamed text grows; it should not crossfade
-                        .id("end")
-                }
-                .scrollIndicators(.never)
-                .frame(maxHeight: ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight)
-                .fixedSize(horizontal: false, vertical: true)
-                .onChange(of: r.text) {
-                    if r.streaming { withAnimation(Motion.content) { proxy.scrollTo("end", anchor: .bottom) } }
-                }
+            ScrollView {
+                Text(markdown(r.text))
+                    .font(.system(size: 13))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentTransition(.identity) // streamed text grows; it should not crossfade
+            }
+            .scrollIndicators(.never)
+            .scrollPosition($ui.replyScroll)
+            .onScrollGeometryChange(for: [CGFloat].self, of: { g in
+                [g.contentOffset.y, max(0, g.contentSize.height - g.containerSize.height)]
+            }) { _, v in
+                ui.replyOffset = v[0]
+                ui.replyMaxOffset = v[1]
+            }
+            .frame(maxHeight: ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .onChange(of: r.text) {
+                if r.streaming { withAnimation(Motion.content) { ui.replyScroll.scrollTo(edge: .bottom) } }
             }
         } else if ui.mode == .expanded {
             Text("No reply yet").font(.callout).foregroundStyle(.tertiary)
@@ -285,6 +295,7 @@ struct OverlayView: View {
         }
         .animation(Motion.snappy, value: ui.pickerIndex)
         .animation(Motion.content, value: ui.pickerQuery)
+        .onChange(of: pickerThreads.count, initial: true) { _, n in ui.pickerCount = n }
     }
 
     private func protocolBanner(_ b: Store.ProtocolBreak) -> some View {
