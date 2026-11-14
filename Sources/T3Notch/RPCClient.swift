@@ -16,6 +16,7 @@ final class RPCClient {
     private var calls: [String: CheckedContinuation<JSON, Error>] = [:]
     private var pingTask: Task<Void, Never>?
     private(set) var isOpen = false
+    private var lastReceivedAt = Date()
 
     /// Called once when the socket closes or fails, with a reason.
     var onClose: ((String) -> Void)?
@@ -46,10 +47,19 @@ final class RPCClient {
         task.resume()
         isOpen = true
         receiveLoop(task)
+        lastReceivedAt = Date()
+        // Ping every 15s; the server answers each with Pong. Silence for 40s means a dead
+        // socket that never reported closing, so drop it and let the store reconnect.
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(15))
-                self?.sendFrame(["_tag": "Ping"])
+                guard let self else { return }
+                if Date().timeIntervalSince(self.lastReceivedAt) > 40 {
+                    self.task?.cancel(with: .goingAway, reason: nil)
+                    self.finish(reason: "no response from T3 for 40s")
+                    return
+                }
+                self.sendFrame(["_tag": "Ping"])
             }
         }
     }
@@ -117,6 +127,7 @@ final class RPCClient {
     }
 
     private func handle(text: String) {
+        lastReceivedAt = Date()
         log.record(direction: "<-", text)
         guard let json = try? JSON.parse(Data(text.utf8)) else {
             onProtocolError?("Server frame is not JSON", text)

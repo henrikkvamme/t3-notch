@@ -50,14 +50,12 @@ github.com/pingdotgg/t3code. Their backpressure rule is in `apps/server/src/term
 
 ### Which thread is the target
 
-The thread with the largest of these values:
+The ⌘K override, otherwise the top of T3's sidebar (`packages/client-runtime/src/state/threadSort.ts`):
 
-- `opens.openedAt` (epoch ms, set when the user opens the thread in T3)
-- `latestUserAuthoredMessageAt`
-- the overlay's own last send
+1. Pinned threads (`pinnedAt` set), ordered by `pinOrderKey`. Unkeyed ones come after the keyed ones, newest `createdAt` first.
+2. With nothing pinned: active threads (not settled, not snoozed), ordered by `activeOrderKey`. Unkeyed ones come first, newest of `createdAt`/`unsettledAt` first.
 
-Do not use `lastVisitedAt`. It is a read-up-to marker set to the thread's own `updatedAt`, not the time
-the user viewed the thread.
+Archived, deleted and subagent child threads are skipped.
 
 ## Fixing a protocol break
 

@@ -45,7 +45,6 @@ final class Store {
     private(set) var subscribedThreadId: String?
     private var threadStreamId: String?
     private var shellStreamId: String?
-    private var shellSnapshotSequence: Double?
     private(set) var messages: [String: JSON] = [:]
     private(set) var runtimeRequests: [String: JSON] = [:]
     private(set) var requestItems: [String: JSON] = [:]
@@ -180,7 +179,8 @@ final class Store {
     // MARK: - Shell stream
 
     private func subscribeShell() {
-        shellSnapshotSequence = nil
+        threads = [:]
+        projects = [:]
         shellStreamId = rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self] item in
             self?.applyShell(item)
         }, onEnd: { [weak self] result in
@@ -196,14 +196,9 @@ final class Store {
                 reportProtocolBreak("Shell snapshot has no threads/projects arrays", raw: String(decoding: item.encoded().prefix(20_000), as: UTF8.self))
                 return
             }
-            // A snapshot arrives in several parts that share one sequence: merge parts,
-            // and start over only when a new sequence begins.
-            let seq = snap["snapshotSequence"].double
-            if seq != shellSnapshotSequence {
-                shellSnapshotSequence = seq
-                threads = [:]
-                projects = [:]
-            }
+            // A snapshot arrives in parts, and parts can carry different sequences (some
+            // only projects). Merge every part; the lists were cleared when this
+            // subscription started, and removals arrive as thread.removed events.
             for t in ts { if let id = t["id"].string { threads[id] = t } }
             for p in ps { if let id = p["id"].string { projects[id] = p } }
         case "thread.updated":
@@ -227,9 +222,53 @@ final class Store {
 
     /// The thread prompts go to: ⌘K override, else the one most recently opened in T3
     /// (`opens.openedAt`) or sent to (from T3 or this overlay).
+    /// The thread prompts go to: the ⌘K override, else the thread at the top of T3's
+    /// sidebar. That is the top pinned thread, or with nothing pinned, the top active one.
     var targetThreadId: String? {
         if let o = overrideThreadId, threads[o] != nil { return o }
-        return recentThreads.first.flatMap { $0["id"].string }
+        return topThread?["id"].string
+    }
+
+    /// Mirrors T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`):
+    /// pinned threads by `pinOrderKey` (unkeyed ones newest first, after keyed), then
+    /// active threads by `activeOrderKey` (unkeyed ones first, newest first).
+    private var topThread: JSON? {
+        let candidates = threads.values.filter {
+            $0["lineage"]["parentThreadId"].isNull && $0["deletedAt"].isNull && $0["archivedAt"].isNull
+        }
+        let pinned = candidates.filter { !$0["pinnedAt"].isNull }
+        if let top = pinned.min(by: pinnedBefore) { return top }
+        let active = candidates.filter(isActive)
+        return (active.isEmpty ? candidates : active).min(by: activeBefore)
+    }
+
+    private func pinnedBefore(_ a: JSON, _ b: JSON) -> Bool {
+        switch (a["pinOrderKey"].string, b["pinOrderKey"].string) {
+        case let (ka?, kb?): return ka != kb ? ka < kb : (a["id"].string ?? "") < (b["id"].string ?? "")
+        case (.some, nil): return true
+        case (nil, .some): return false
+        case (nil, nil): return (a["createdAt"].epochMs ?? 0) > (b["createdAt"].epochMs ?? 0)
+        }
+    }
+
+    private func activeBefore(_ a: JSON, _ b: JSON) -> Bool {
+        let anchor = { (t: JSON) in max(t["createdAt"].epochMs ?? 0, t["unsettledAt"].epochMs ?? 0) }
+        switch (a["activeOrderKey"].string, b["activeOrderKey"].string) {
+        case let (ka?, kb?): return ka != kb ? ka < kb : (a["id"].string ?? "") < (b["id"].string ?? "")
+        case (nil, .some): return true
+        case (.some, nil): return false
+        case (nil, nil): return anchor(a) > anchor(b)
+        }
+    }
+
+    /// Not settled or snoozed, so it shows in the sidebar's active list.
+    private func isActive(_ t: JSON) -> Bool {
+        if let until = t["snoozedUntil"].epochMs, until > Date().timeIntervalSince1970 * 1000 { return false }
+        switch t["settledOverride"].string {
+        case "settled": return false
+        case "unsettled": return true
+        default: return t["settledAt"].isNull
+        }
     }
 
     var targetThread: JSON? { targetThreadId.flatMap { threads[$0] } }
@@ -360,7 +399,14 @@ final class Store {
 
     func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let threadId = targetThreadId else { return }
+        guard !trimmed.isEmpty else { return }
+        guard let threadId = targetThreadId else {
+            lastSendError = threads.isEmpty
+                ? "No threads loaded from T3 yet. Reconnecting…"
+                : "No thread to send to. Pin one in T3 or pick one with ⌘K."
+            if threads.isEmpty { reconnectNow() }
+            return
+        }
         let id = UUID().uuidString.lowercased()
         lastSendError = nil
         localSends[threadId] = Date().timeIntervalSince1970 * 1000
