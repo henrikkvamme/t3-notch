@@ -18,6 +18,8 @@ final class OverlayUIState {
     var clips: [Clip] = []
     /// Removed clips, newest last, with their old position, for ⌘Z / ⌃Z.
     var removedClips: [(clip: Clip, index: Int)] = []
+    /// The element level picked while clipping; kept across clipping until the message is sent.
+    var clipDepth = 0
     /// The draft when the last clip was removed; undo restores clips only while it is unchanged,
     /// so ⌘Z after typing still undoes typing.
     var draftAtClipRemoval = ""
@@ -413,7 +415,7 @@ struct OverlayView: View {
         let text = ui.draft
         let images = ui.clips.map(\.png)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = [] }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         Task { await store.send(text, images: images) }
     }
 

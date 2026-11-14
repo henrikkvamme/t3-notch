@@ -25,10 +25,10 @@ final class ClipController {
     private var windows: [NotchPanel] = []
     private var monitors: [Any] = []
     private let probe = ElementProbe()
-    private let onFinish: ([Clip]) -> Void
+    private let onFinish: ([Clip], Int) -> Void
     private var finished = false
 
-    private init(onFinish: @escaping ([Clip]) -> Void) {
+    private init(onFinish: @escaping ([Clip], Int) -> Void) {
         self.onFinish = onFinish
     }
 
@@ -36,8 +36,9 @@ final class ClipController {
     /// (possibly none) when the mode ends; `onFailure` if capture is not allowed.
     /// Captures the screens and shows the overlay; calls `onFinish` with the clips taken
     /// (possibly none). The caller checks Screen Recording first (see `Permission`).
-    static func start(onFinish: @escaping ([Clip]) -> Void) -> ClipController {
+    static func start(depth: Int, onFinish: @escaping ([Clip], Int) -> Void) -> ClipController {
         let controller = ClipController(onFinish: onFinish)
+        controller.state.depth = depth
         Task { await controller.begin() }
         return controller
     }
@@ -91,7 +92,7 @@ final class ClipController {
         } as Any)
         // Scroll to grow (up) or shrink (down) the picked element.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            MainActor.assumeIsolated { self?.state.scroll(by: e.scrollingDeltaY) }
+            MainActor.assumeIsolated { self?.state.scroll(e) }
             return nil
         } as Any)
     }
@@ -122,7 +123,7 @@ final class ClipController {
             try? await Task.sleep(for: .milliseconds(220))
             for w in windows { w.orderOut(nil) }
         }
-        onFinish(clips)
+        onFinish(clips, state.depth)
     }
 
     static func globalMouse() -> CGPoint {
@@ -156,18 +157,29 @@ final class ClipState {
         return chain[min(depth, chain.count - 1)]
     }
 
+    /// The level is kept as you move between elements (clamped only for display), so the
+    /// same kind of chunk stays picked; it resets when the message is sent.
     func setChain(_ new: [CGRect]) {
-        if new.first != chain.first { depth = 0 }
         chain = new
-        depth = min(depth, max(chain.count - 1, 0))
     }
 
-    func scroll(by delta: CGFloat) {
-        scrollAccumulator += delta
-        guard abs(scrollAccumulator) >= 6 else { return }
-        let step = scrollAccumulator > 0 ? 1 : -1
-        scrollAccumulator = 0
-        depth = min(max(depth + step, 0), max(chain.count - 1, 0))
+    /// A mouse wheel moves one level per tick. A trackpad needs about 40pt of travel per
+    /// level and its momentum is ignored, so a light swipe does not skip levels.
+    func scroll(_ e: NSEvent) {
+        let step: Int
+        if e.hasPreciseScrollingDeltas {
+            guard e.momentumPhase.isEmpty else { return }
+            if e.phase == .began { scrollAccumulator = 0 }
+            scrollAccumulator += e.scrollingDeltaY
+            guard abs(scrollAccumulator) >= 40 else { return }
+            step = scrollAccumulator > 0 ? 1 : -1
+            scrollAccumulator = 0
+        } else {
+            guard e.scrollingDeltaY != 0 else { return }
+            step = e.scrollingDeltaY > 0 ? 1 : -1
+        }
+        let top = max(chain.count - 1, 0)
+        depth = min(max(min(depth, top) + step, 0), top)
     }
 
     /// Crops a global rect out of the frozen frame of the screen it is mostly on.

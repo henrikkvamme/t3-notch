@@ -382,7 +382,7 @@ final class PanelController {
         let text = ui.draft
         let images = ui.clips.map(\.png)
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = [] }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         Task { await store.send(text, steer: steer, images: images) }
     }
 
@@ -407,9 +407,10 @@ final class PanelController {
         ui.pickerOpen = false
         panel.ignoresMouseEvents = true
         panel.orderOut(nil)
-        clipper = ClipController.start { [weak self] clips in
+        clipper = ClipController.start(depth: ui.clipDepth) { [weak self] clips, depth in
             guard let self else { return }
             self.clipper = nil
+            self.ui.clipDepth = depth
             self.ui.clips += clips
             self.expand()
             self.showMissingPermissions()
