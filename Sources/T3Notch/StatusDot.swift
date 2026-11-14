@@ -60,24 +60,36 @@ final class StatusDotController {
         if ui.notchScreenFullscreen != now { ui.notchScreenFullscreen = now }
     }
 
-    /// True when a normal window of another app covers the whole screen, menu-bar strip
-    /// included. Window bounds are readable without Screen Recording permission.
+    /// True when another app is fullscreen on this screen. That shows up in the window
+    /// list one of two ways (bounds are readable without Screen Recording permission):
+    /// - one normal window covering the whole screen, or
+    /// - on a notched screen, where fullscreen content sits below the notch: a normal
+    ///   window filling the screen below the menu-bar strip, plus a full-width strip
+    ///   from the same app covering the menu bar. A maximized window has no such strip.
     private static func isFullscreen(on screen: NSScreen) -> Bool {
         guard let primary = NSScreen.screens.first,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return false }
         // CoreGraphics window coordinates have their origin at the primary screen's top-left.
-        let target = CGRect(x: screen.frame.minX, y: primary.frame.maxY - screen.frame.maxY,
-                            width: screen.frame.width, height: screen.frame.height)
+        let s = CGRect(x: screen.frame.minX, y: primary.frame.maxY - screen.frame.maxY,
+                       width: screen.frame.width, height: screen.frame.height)
+        let strip = max(screen.safeAreaInsets.top, screen.frame.maxY - screen.visibleFrame.maxY, 24)
         let me = ProcessInfo.processInfo.processIdentifier
-        return list.contains { w in
-            guard (w[kCGWindowLayer as String] as? Int) == 0,
-                  (w[kCGWindowOwnerPID as String] as? Int32) != me,
+        func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) <= 2 }
+
+        var body = Set<Int32>(), top = Set<Int32>()
+        for w in list {
+            guard let pid = w[kCGWindowOwnerPID as String] as? Int32, pid != me,
+                  let layer = w[kCGWindowLayer as String] as? Int,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
-                  let rect = CGRect(dictionaryRepresentation: b as CFDictionary) else { return false }
-            return abs(rect.minX - target.minX) < 1 && abs(rect.minY - target.minY) < 1
-                && rect.width >= target.width - 1 && rect.height >= target.height - 1
+                  let r = CGRect(dictionaryRepresentation: b as CFDictionary),
+                  near(r.minX, s.minX), r.width >= s.width - 2 else { continue }
+            let reachesBottom = r.maxY >= s.maxY - 2
+            if layer == 0, near(r.minY, s.minY), reachesBottom { return true } // covers everything
+            if layer == 0, r.minY > s.minY, r.minY <= s.minY + strip + 2, reachesBottom { body.insert(pid) }
+            if near(r.minY, s.minY), r.height <= strip + 2 { top.insert(pid) }
         }
+        return !body.isDisjoint(with: top)
     }
 
     private static var notchScreen: NSScreen {
