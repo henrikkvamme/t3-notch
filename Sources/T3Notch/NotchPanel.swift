@@ -172,7 +172,7 @@ final class PanelController {
         ui.draft = ""
         ui.clips = []
         ui.removedClips = []
-        if let pid = store.runtime?.pid { Handoff.pasteClips(clips, into: pid) }
+        if let pid = store.runtime?.app?.processIdentifier { Handoff.pasteClips(clips, into: pid) }
     }
 
     /// Gives keyboard focus back to the app you were in, if the island had taken it.

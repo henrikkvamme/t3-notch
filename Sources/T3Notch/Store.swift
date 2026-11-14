@@ -539,7 +539,7 @@ final class Store {
     /// prompt-link format; T3 asks first if that chat already has a draft).
     func openTargetInT3(prompt: String? = nil) {
         guard let id = targetThreadId, environmentId != nil else {
-            if let pid = runtime?.pid { NSRunningApplication(processIdentifier: pid)?.activate() }
+            runtime?.app?.activate()
             return
         }
         // Thread ids can contain ":" (e.g. "mcp:…"), so encode each path segment.

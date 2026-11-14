@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import Darwin
 
 /// Where the local T3 Code server is, read from the file the `t3` CLI uses.
 struct T3Runtime: Equatable, Sendable {
@@ -25,4 +26,17 @@ struct T3Runtime: Equatable, Sendable {
     }
 
     var httpBase: URL { URL(string: "http://127.0.0.1:\(port)")! }
+
+    /// The T3 window app. `pid` is the background server, a child process running the same
+    /// executable, so look up the app bundle it runs from and find that app's window process.
+    var app: NSRunningApplication? {
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        let path = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        guard let range = path.range(of: ".app/", options: .backwards),
+              let bundleId = Bundle(path: String(path[..<range.lowerBound]) + ".app")?.bundleIdentifier
+        else { return nil }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+            .first { $0.activationPolicy == .regular }
+    }
 }
