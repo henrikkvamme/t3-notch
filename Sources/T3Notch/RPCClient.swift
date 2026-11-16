@@ -209,7 +209,7 @@ final class FrameLog {
     }
 
     static var directory: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/T3Notch")
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(BuildInfo.isDev ? "Library/Logs/T3Notch-Dev" : "Library/Logs/T3Notch")
     }
 
     /// Writes the buffered frames plus the failing one; returns the file.

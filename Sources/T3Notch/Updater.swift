@@ -35,7 +35,7 @@ final class Updater {
     }
 
     func start() {
-        guard !Store.demo else { return }
+        guard !Store.demo, !BuildInfo.isDev else { return }
         Task { await check() }
         timer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.check() }
@@ -45,6 +45,8 @@ final class Updater {
     // MARK: Check
 
     func check() async {
+        // A dev build would otherwise replace itself with the release.
+        guard !BuildInfo.isDev else { return }
         if case .installing = state { return }
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(BuildInfo.repo)/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")

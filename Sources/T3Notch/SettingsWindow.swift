@@ -209,8 +209,17 @@ private struct SettingsView: View {
         HStack(spacing: 12) {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
-                Text("T3 Notch").font(.system(size: 15, weight: .semibold))
-                Text("v\(Updater.currentVersion)").font(.system(size: 12)).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text("T3 Notch").font(.system(size: 15, weight: .semibold))
+                    // Marks a local `make` build, which can run beside the release.
+                    if BuildInfo.isDev {
+                        Text("DEV").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(.orange))
+                    }
+                }
+                Text(BuildInfo.isDev ? "v\(Updater.currentVersion) · local build" : "v\(Updater.currentVersion)")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer()
             HStack(spacing: 6) {

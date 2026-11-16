@@ -1,7 +1,9 @@
 # T3 Notch: notes for agents
 
 A Swift Package with no dependencies. The UI is SwiftUI inside an AppKit `NSPanel`. Build it with
-`make app`, or install and run it with `make install`.
+`make app`, or install and run it with `make install`. Both make **T3 Notch Dev** (bundle id
+`dev.t3notch.app.dev`, `BuildInfo.isDev`), which runs beside the release in /Applications and does not
+self-update. `make install` quits and replaces only the dev copy.
 
 ## Files
 

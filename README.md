@@ -113,6 +113,11 @@ cd ~/code/t3-notch
 make install   # builds, signs, copies to ~/Applications and starts it
 ```
 
+A source build is **T3 Notch Dev** (bundle id `dev.t3notch.app.dev`). It has its own permissions,
+settings and logs (`~/Library/Logs/T3Notch-Dev`), and it never updates itself, so it can run beside the
+release. Global shortcuts go to whichever copy starts first; give the other one different keys in its
+settings.
+
 **Signing.** `make app` signs with the first *Apple Development* certificate in your keychain, so macOS keeps
 the Screen Recording and Accessibility permissions across rebuilds. Without one it signs ad hoc, which works,
 but each rebuild asks for those permissions again. Choose an identity with `make SIGN_ID=<hash> install`.
