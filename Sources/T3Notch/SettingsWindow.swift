@@ -66,7 +66,7 @@ final class SettingsController {
 
     /// Top right, just below the status dot beside the notch.
     private func place() {
-        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = StatusDotController.dotScreen
         let notch = NotchGeometry.forScreen(screen).notchRect
         let s = Self.size
         let x = min(notch.maxX + 44 - s.width + 24, screen.frame.maxX - s.width - 8)

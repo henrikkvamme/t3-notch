@@ -4,8 +4,9 @@ import SwiftUI
 /// A small dot just right of the notch showing the target thread's status while the
 /// overlay is hidden. Clicking it opens the overlay.
 ///
-/// It goes on the screen with a real notch, or on the main screen beside where the
-/// drawn notch would be when no screen has one. The panel stays on screen so the dot
+/// It goes on the main display (the one with the menu bar, as set in System Settings), beside
+/// its real notch or where the drawn notch would be. The island itself still opens on
+/// whichever screen the pointer is on. The panel stays on screen so the dot
 /// can animate in and out; it ignores the mouse while there is no dot.
 @MainActor
 final class StatusDotController {
@@ -119,7 +120,7 @@ final class StatusDotController {
     }
 
     private func checkFullscreen() {
-        let screen = Self.notchScreen
+        let screen = Self.dotScreen
         let now = Spaces.isFullscreenSpace(on: screen) || Self.isFullscreen(on: screen)
         if ui.notchScreenFullscreen != now { ui.notchScreenFullscreen = now }
     }
@@ -156,12 +157,14 @@ final class StatusDotController {
         return !body.isDisjoint(with: top)
     }
 
-    private static var notchScreen: NSScreen {
-        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main ?? NSScreen.screens[0]
+    /// The main display. `NSScreen.screens[0]` is the one with the menu bar; `NSScreen.main`
+    /// is only the screen with the key window.
+    static var dotScreen: NSScreen {
+        NSScreen.screens.first ?? NSScreen.main ?? NSScreen.screens[0]
     }
 
     private func place() {
-        let notch = NotchGeometry.forScreen(Self.notchScreen).notchRect
+        let notch = NotchGeometry.forScreen(Self.dotScreen).notchRect
         panel.setFrame(NSRect(x: notch.maxX, y: notch.minY, width: Self.width, height: notch.height), display: true)
     }
 
