@@ -34,6 +34,11 @@ final class RPCClient {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if status == 401 || status == 403 { throw AppError.auth("token rejected (\(status))") }
+        // Timeouts, rate limits and server errors happen (e.g. right after the Mac wakes); they
+        // are not a protocol change, so fail as transient and let the store reconnect.
+        if status == 408 || status == 429 || (500...599).contains(status) {
+            throw AppError.rpc("websocket-ticket returned \(status); retrying")
+        }
         guard status == 200, let ticket = try? JSON.parse(data)["ticket"].string else {
             throw AppError.protocolMismatch("websocket-ticket returned \(status): \(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
