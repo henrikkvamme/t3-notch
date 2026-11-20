@@ -233,8 +233,8 @@ private struct SettingsView: View {
         VStack(spacing: 0) {
             row("Expand on notch hover", isOn: $model.expandOnHover)
             divider
-            row("Show when chat finishes", isOn: $model.showWhenChatFinishes)
-                .help("Does not open while T3 is focused")
+            row("Show when chat finishes", caption: "Only applies when T3 is not in view",
+                isOn: $model.showWhenChatFinishes)
             divider
             row("Show commands while working", isOn: $model.showToolSteps)
             divider
@@ -317,10 +317,15 @@ private struct SettingsView: View {
         .glassEffect(.regular.interactive(), in: .circle)
     }
 
-    /// Label left, switch right.
-    private func row(_ title: String, isOn: Binding<Bool>) -> some View {
+    /// Label left (with an optional caption under it), switch right.
+    private func row(_ title: String, caption: String? = nil, isOn: Binding<Bool>) -> some View {
         HStack {
-            Text(title).font(.system(size: 13))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 13))
+                if let caption {
+                    Text(caption).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
             Spacer(minLength: 12)
             Toggle("", isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
         }
