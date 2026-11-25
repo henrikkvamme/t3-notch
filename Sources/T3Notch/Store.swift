@@ -166,6 +166,7 @@ final class Store {
                 await loadEnvironmentId(runtime)
                 subscribeShell()
                 await refreshLinkedEnvironments()
+                watchLinks()
             } catch let error as AppError {
                 if case .protocolMismatch(let s) = error { reportProtocolBreak(s, raw: s) }
                 fail(error.description)
@@ -191,6 +192,7 @@ final class Store {
     }
 
     private func disconnect() {
+        linkWatchTask?.cancel(); linkWatchTask = nil
         rpc.close()
         shellStreamId = nil
         if threadStreamRpc === rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
@@ -221,6 +223,20 @@ final class Store {
     }
 
     // MARK: - Linked environments
+
+    private var linkWatchTask: Task<Void, Never>?
+
+    /// T3 sends no event when a link is added or removed, so read the links again now and then.
+    private func watchLinks() {
+        linkWatchTask?.cancel()
+        linkWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled, let self, self.rpc.isOpen else { return }
+                await self.refreshLinkedEnvironments()
+            }
+        }
+    }
 
     /// Reads which environments the local one links to (`peerLinks.names`) and connects to each
     /// new one; closes those no longer linked. Older servers lack the method: then none.

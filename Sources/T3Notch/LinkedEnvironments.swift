@@ -74,6 +74,9 @@ final class LinkedEnvironment {
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var failuresAtSavedAddress = 0
     @ObservationIgnored private var stopped = false
+    /// True while an attempt runs. Only one runs at a time: two would share `rpc`, and the
+    /// one that finished last would replace the other's socket.
+    @ObservationIgnored private var connecting = false
 
     /// Asks the local server for a pairing with this environment (`peerLinks.pairClient`).
     @ObservationIgnored var requestPairing: (String) async throws -> JSON = { _ in throw AppError.rpc("no local server") }
@@ -105,15 +108,19 @@ final class LinkedEnvironment {
         rpc.close()
     }
 
+    /// Connects again now. While an attempt already runs, that attempt is the reconnect.
     func reconnectNow() {
         retryTask?.cancel(); retryTask = nil
+        guard !connecting else { return }
         rpc.close()
         shellStreamId = nil
         Task { await connect() }
     }
 
     private func connect() async {
-        guard !stopped else { return }
+        guard !stopped, !connecting else { return }
+        connecting = true
+        defer { connecting = false }
         state = .connecting
         if let saved = LinkedCredentials.get(id), let base = URL(string: saved.url) {
             do {
