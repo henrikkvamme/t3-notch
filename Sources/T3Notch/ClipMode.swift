@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import ScreenCaptureKit
 import SwiftUI
+import os
 
 /// A screen region added as context: the cropped PNG plus a thumbnail for the island.
 struct Clip: Identifiable, Equatable {
@@ -44,11 +45,7 @@ final class ClipController {
         state.pointer = pointer
         state.setChain(chain)
     }
-    func demoScroll(_ step: Int) {
-        let top = max(state.chain.count - 1, 0)
-        let current = state.depth < 0 ? -1 : min(state.depth, top)
-        state.depth = min(max(current + step, -1), top)
-    }
+    func demoScroll(_ step: Int) { state.step(step) }
     func demoClick() { if let h = state.highlight { add(h) } }
 
     static func start(depth: Int, onFinish: @escaping ([Clip], Int) -> Void) -> ClipController {
@@ -175,16 +172,23 @@ final class ClipState {
 
     var active = false
     var frozen: [Frozen] = []
-    /// Element frames under the pointer, smallest first.
-    var chain: [CGRect] = []
-    /// How many steps up the chain the highlight is; −1 means the whole window.
+    /// Element frames under the pointer, smallest first, each one different from the others.
+    private(set) var chain: [CGRect] = []
+    /// The level you want: how many steps up the chain, −1 for the whole window. It is kept
+    /// as you move between elements and can be past the end of a short chain; `level` is
+    /// the level shown.
     var depth = 0
+    /// The element you scrolled to. It stays picked while it is under the pointer, even when
+    /// the chain below it gets longer or shorter.
+    private var anchor: CGRect?
     var drag: CGRect?
     /// Where the pointer is (global), for the dot cursor.
     var pointer: CGPoint?
     var added: [CGRect] = []
     var clips: [Clip] = []
     private var scrollAccumulator: CGFloat = 0
+    private var scrollThreshold: CGFloat = 40
+    @ObservationIgnored private let haptics = ClipHaptics()
 
     /// The saved clip under the pointer (newest wins), which a click removes.
     var hoveredSaved: Int? {
@@ -195,37 +199,69 @@ final class ClipState {
     var highlight: CGRect? {
         if let drag { return drag }
         if let i = hoveredSaved { return added[i] }
-        guard !chain.isEmpty else { return nil }
-        if depth < 0 { return chain.last } // −1: the whole window
-        return chain[min(depth, chain.count - 1)]
+        return rect(at: level)
     }
 
-    /// The level is kept as you move between elements (clamped only for display), so the
-    /// same kind of chunk stays picked; it resets when the message is sent.
+    /// The level shown, always inside the chain: the anchored element while it is under the
+    /// pointer, else `depth` clamped to the chain.
+    private var level: Int {
+        if let anchor, let i = chain.firstIndex(where: { $0.isSame(as: anchor) }) { return i }
+        return depth < 0 ? -1 : min(depth, max(chain.count - 1, 0))
+    }
+
+    private func rect(at level: Int) -> CGRect? {
+        level < 0 ? chain.last : chain.indices.contains(level) ? chain[level] : nil
+    }
+
+    /// Takes the chain under the pointer. A frame that comes again further out is dropped
+    /// (the outer one stays, so the window is always last): each level then looks different.
     func setChain(_ new: [CGRect]) {
-        chain = new
+        var unique: [CGRect] = []
+        for r in new.reversed() where !unique.contains(where: { $0.isSame(as: r) }) { unique.append(r) }
+        chain = unique.reversed()
     }
 
-    /// A mouse wheel moves one level per tick. A trackpad needs about 40pt of travel per
-    /// level and its momentum is ignored, so a light swipe does not skip levels.
+    /// A mouse wheel moves one level per tick. A trackpad moves one level after 16pt of
+    /// travel and then one per 40pt, so a short swipe always counts and a long one does not
+    /// skip levels. Its momentum is ignored.
     func scroll(_ e: NSEvent) {
-        let step: Int
-        if e.hasPreciseScrollingDeltas {
-            guard e.momentumPhase.isEmpty else { return }
-            if e.phase == .began { scrollAccumulator = 0 }
-            scrollAccumulator += e.scrollingDeltaY
-            guard abs(scrollAccumulator) >= 40 else { return }
-            step = scrollAccumulator > 0 ? 1 : -1
-            scrollAccumulator = 0
-        } else {
-            guard e.scrollingDeltaY != 0 else { return }
-            step = e.scrollingDeltaY > 0 ? 1 : -1
+        guard e.hasPreciseScrollingDeltas else {
+            if e.scrollingDeltaY != 0 { step(e.scrollingDeltaY > 0 ? 1 : -1) }
+            return
         }
-        // Levels: −1 is the window (its own level, below the smallest element), then
-        // 0 … top from the smallest element outwards. Scrolling stops at both ends.
-        let top = max(chain.count - 1, 0)
-        let current = depth < 0 ? -1 : min(depth, top)
-        depth = min(max(current + step, -1), top)
+        guard e.momentumPhase.isEmpty else { return }
+        if e.phase == .began {
+            scrollAccumulator = 0
+            scrollThreshold = 16
+        }
+        let delta = e.scrollingDeltaY
+        guard delta != 0 else { return }
+        // A turn starts from zero: travel the other way must not cancel it. Devices that
+        // send no phases never get the reset above.
+        if (delta > 0) != (scrollAccumulator > 0) { scrollAccumulator = 0 }
+        scrollAccumulator += delta
+        guard abs(scrollAccumulator) >= scrollThreshold else { return }
+        step(scrollAccumulator > 0 ? 1 : -1)
+        scrollAccumulator = 0
+        scrollThreshold = 40
+    }
+
+    /// Moves the highlight one level up (+1) or down (−1) from the level shown. Levels: −1
+    /// is the window (its own level, below the smallest element), then 0 … top from the
+    /// smallest element outwards. Scrolling stops at both ends, and at a level that would
+    /// show the same frame (−1 and top are both the window).
+    func step(_ step: Int) {
+        guard step != 0, !chain.isEmpty else { return }
+        let current = level
+        let target = min(max(current + step, -1), chain.count - 1)
+        guard let now = rect(at: current), let next = rect(at: target), !next.isSame(as: now) else {
+            haptics.limit(step > 0 ? .top : .bottom)
+            return
+        }
+        depth = target
+        // Levels 0 and −1 mean "the smallest element" and "the window" wherever you point.
+        anchor = target > 0 ? next : nil
+        haptics.step(depth: target)
     }
 
     /// Crops a global rect out of the frozen frame of the screen it is mostly on.
@@ -245,6 +281,47 @@ final class ClipState {
     }
 
     private func area(_ r: CGRect) -> CGFloat { r.isNull ? 0 : r.width * r.height }
+}
+
+extension CGRect {
+    /// True when the two frames look the same on screen (less than 2pt apart on each side).
+    fileprivate func isSame(as o: CGRect) -> Bool {
+        abs(minX - o.minX) < 2 && abs(minY - o.minY) < 2 && abs(width - o.width) < 2 && abs(height - o.height) < 2
+    }
+}
+
+// MARK: - Haptics
+
+/// Trackpad feedback for level changes: a light tap per level, and a stronger one when a
+/// scroll reaches the top or bottom level. The stronger one comes once per reach, and again
+/// only after a step away. Each one is logged (category "haptics"), so `log stream` shows
+/// them on a Mac with no trackpad.
+@MainActor
+final class ClipHaptics {
+    enum Edge: String { case top, bottom }
+
+    private let perform: (NSHapticFeedbackManager.FeedbackPattern) -> Void
+    private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.t3notch.app", category: "haptics")
+    private var atLimit: Edge?
+
+    init(perform: @escaping (NSHapticFeedbackManager.FeedbackPattern) -> Void = {
+        NSHapticFeedbackManager.defaultPerformer.perform($0, performanceTime: .now)
+    }) {
+        self.perform = perform
+    }
+
+    func step(depth: Int) {
+        atLimit = nil
+        perform(.alignment)
+        log.notice("haptic step depth=\(depth, privacy: .public)")
+    }
+
+    func limit(_ edge: Edge) {
+        guard atLimit != edge else { return }
+        atLimit = edge
+        perform(.levelChange)
+        log.notice("haptic limit \(edge.rawValue, privacy: .public)")
+    }
 }
 
 // MARK: - Element probe
@@ -296,7 +373,7 @@ final class ElementProbe: @unchecked Sendable {
             if let f = Self.frame(of: element) {
                 let r = f.intersection(window)
                 if !r.isNull, r.width >= 16, r.height >= 12,
-                   frames.last.map({ !Self.same($0, r) }) ?? true {
+                   frames.last.map({ !$0.isSame(as: r) }) ?? true {
                     frames.append(r)
                 }
             }
@@ -306,7 +383,7 @@ final class ElementProbe: @unchecked Sendable {
                   let next = parent, CFGetTypeID(next) == AXUIElementGetTypeID() else { break }
             element = next as! AXUIElement
         }
-        if frames.last.map({ !Self.same($0, window) }) ?? true { frames.append(window) }
+        if frames.last.map({ !$0.isSame(as: window) }) ?? true { frames.append(window) }
         return frames
     }
 
@@ -339,10 +416,6 @@ final class ElementProbe: @unchecked Sendable {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(e, kAXRoleAttribute as CFString, &v) == .success else { return nil }
         return v as? String
-    }
-
-    private static func same(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
     }
 }
 

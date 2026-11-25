@@ -86,6 +86,10 @@ final class PanelController {
     private var localKeyMonitor: Any?
     private var peekHideTask: Task<Void, Never>?
     private var orderOutTask: Task<Void, Never>?
+    /// Reads the pointer while the island is open. Mouse-moved events are not enough: AppKit
+    /// does not send them to a panel that is not key in an app that is not active, so a
+    /// pointer that leaves the island over the panel's transparent canvas can go unseen.
+    private var mouseTimer: Timer?
 
     init(store: Store) {
         self.store = store
@@ -203,6 +207,7 @@ final class PanelController {
             ui.pickerOpen = false
         }
         panel.ignoresMouseEvents = true
+        stopMouseTimer()
         // Take the canvas away once the island has shrunk into the notch.
         orderOutTask?.cancel()
         orderOutTask = Task { [weak self] in
@@ -215,6 +220,24 @@ final class PanelController {
     private func present() {
         orderOutTask?.cancel()
         panel.orderFrontRegardless()
+        startMouseTimer()
+    }
+
+    private func startMouseTimer() {
+        guard mouseTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.ui.mode != .hidden else { return }
+                self.updateMouse()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        mouseTimer = timer
+    }
+
+    private func stopMouseTimer() {
+        mouseTimer?.invalidate()
+        mouseTimer = nil
     }
 
     /// Sets the mode with the open spring. From hidden, wait one runloop turn so the
@@ -276,9 +299,13 @@ final class PanelController {
     private func setHovering(_ hovering: Bool) {
         guard ui.hovering != hovering else { return }
         ui.hovering = hovering
-        if ui.mode == .peek, !hovering { schedulePeekHide(after: 1.5) }
+        if ui.mode == .peek, !hovering { schedulePeekHide(after: Self.peekLeaveDelay) }
         if hovering { peekHideTask?.cancel() }
     }
+
+    /// How long a peek stays after the pointer leaves it: long enough to forgive a pointer
+    /// that slips off the edge and comes back, short enough to feel like it follows you.
+    private static let peekLeaveDelay = 0.6
 
     private func checkNotchHover(_ p: NSPoint) {
         // Setting on: any focused chat, not over a fullscreen app.
@@ -286,7 +313,7 @@ final class PanelController {
         let g = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
         if NSMouseInRect(p, g.notchRect.insetBy(dx: -8, dy: 0), false) {
             peek(autoHide: false)
-            schedulePeekHide(after: 2.5) // stays while hovered
+            schedulePeekHide(after: 1.5) // stays while hovered
         }
     }
 
