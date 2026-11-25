@@ -2,7 +2,12 @@ import AppKit
 import Foundation
 import Observation
 
-/// What the overlay knows about T3, kept in sync over one WebSocket.
+/// What the overlay knows about T3: the local server over one WebSocket, plus each
+/// environment it links to (`LinkedEnvironment`) over that environment's own WebSocket.
+///
+/// Chats and projects from all of them share one list. Their keys are `Store.key(env, id)`,
+/// and every row carries `key`, `environmentId` and, for a linked environment,
+/// `environmentLabel`.
 @Observable
 @MainActor
 final class Store {
@@ -32,12 +37,25 @@ final class Store {
     private(set) var runtime: T3Runtime?
     private(set) var environmentId: String?
 
-    /// Active (non-archived) thread shells and projects, keyed by id.
+    /// Active (non-archived) thread shells and projects of every environment, by `key(env, id)`.
     private(set) var threads: [String: JSON] = [:]
     private(set) var projects: [String: JSON] = [:]
 
-    /// The chat prompts go to, picked in the ⌘K list. There is no default: with none (or
-    /// once it is archived or deleted), opening the island shows the list. Kept across launches.
+    /// The environments the local one links to, by environment id.
+    private(set) var linked: [String: LinkedEnvironment] = [:]
+
+    /// The key of a thread or project of an environment. Environment ids never hold "/".
+    static func key(_ environmentId: String, _ id: String) -> String { environmentId + "/" + id }
+
+    /// The key of the project a thread row belongs to.
+    static func projectKey(for thread: JSON) -> String {
+        key(thread["environmentId"].string ?? "", thread["projectId"].string ?? "")
+    }
+
+    /// The chat prompts go to (its `key`), picked in the ⌘K list. There is no default: with none
+    /// (or once it is archived or deleted), opening the island shows the list. Kept across
+    /// launches. A value without "/" is a thread id from before linked environments, on the
+    /// local server; `loadEnvironmentId` turns it into a key.
     var focusedThreadId: String? = Store.demo ? nil : UserDefaults.standard.string(forKey: "focusedThreadId") {
         didSet {
             if !Store.demo { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId") }
@@ -52,13 +70,14 @@ final class Store {
     var onDemoSend: ((String, Bool, Int) -> Void)?
     var onDemoRespond: ((String) -> Void)?
 
-    func demoConnect() { connection = .connected }
-    func demoApply(_ item: JSON) { applyShell(item) }
+    func demoConnect() { connection = .connected; environmentId = "demo" }
+    func demoApply(_ item: JSON) { applyShell(item, environmentId: "demo") }
     func demoSetRequestItem(_ requestId: String, _ item: JSON) { requestItems[requestId] = item }
 
-    // The subscribed thread's live detail.
+    // The subscribed thread's live detail. `subscribedThreadId` is a key.
     private(set) var subscribedThreadId: String?
     private var threadStreamId: String?
+    private var threadStreamRpc: RPCClient?
     private var shellStreamId: String?
     private(set) var messages: [String: JSON] = [:]
     private(set) var runtimeRequests: [String: JSON] = [:]
@@ -137,15 +156,16 @@ final class Store {
                 var token = Auth.storedToken()
                 if token == nil { token = try await Auth.issueToken() }
                 do {
-                    try await rpc.connect(runtime: runtime, token: token!)
+                    try await rpc.connect(httpBase: runtime.httpBase, token: token!)
                 } catch AppError.auth {
                     // Expired or revoked: mint a fresh token once.
                     Auth.clear()
-                    try await rpc.connect(runtime: runtime, token: try await Auth.issueToken())
+                    try await rpc.connect(httpBase: runtime.httpBase, token: try await Auth.issueToken())
                 }
                 connection = .connected
                 await loadEnvironmentId(runtime)
                 subscribeShell()
+                await refreshLinkedEnvironments()
             } catch let error as AppError {
                 if case .protocolMismatch(let s) = error { reportProtocolBreak(s, raw: s) }
                 fail(error.description)
@@ -173,14 +193,18 @@ final class Store {
     private func disconnect() {
         rpc.close()
         shellStreamId = nil
-        threadStreamId = nil
-        subscribedThreadId = nil
+        if threadStreamRpc === rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
+        // Linked environments are found through the local server, so they start over with it.
+        for env in linked.values { env.stop() }
+        linked = [:]
+        threads = [:]
+        projects = [:]
+        shellVersion &+= 1
     }
 
     private func socketClosed(_ reason: String) {
         shellStreamId = nil
-        threadStreamId = nil
-        subscribedThreadId = nil
+        if threadStreamRpc === rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
         guard runtime != nil, reason != "closed" else { return }
         fail(reason)
     }
@@ -190,22 +214,126 @@ final class Store {
         if let (data, _) = try? await URLSession.shared.data(from: url), let json = try? JSON.parse(data) {
             environmentId = json["environmentId"].string ?? json["id"].string ?? json["environment"]["id"].string
         }
+        // A chat picked before linked environments is a bare thread id on this server.
+        if let env = environmentId, let old = focusedThreadId, !old.contains("/") {
+            focusedThreadId = Self.key(env, old)
+        }
     }
+
+    // MARK: - Linked environments
+
+    /// Reads which environments the local one links to (`peerLinks.names`) and connects to each
+    /// new one; closes those no longer linked. Older servers lack the method: then none.
+    func refreshLinkedEnvironments() async {
+        guard rpc.isOpen, !Store.demo else { return }
+        guard let result = try? await rpc.call("peerLinks.names", [:]), let links = result["links"].array else { return }
+        var seen = Set<String>()
+        for link in links {
+            guard let id = link["environmentId"].string, id != environmentId else { continue }
+            seen.insert(id)
+            let label = link["label"].string ?? id
+            if let env = linked[id] { env.label = label; continue }
+            let env = LinkedEnvironment(id: id, label: label)
+            env.requestPairing = { [weak self] id in
+                guard let self else { throw AppError.rpc("closed") }
+                return try await self.requestPairing(id)
+            }
+            env.onConnected = { [weak self] env in self?.subscribeShell(of: env) }
+            env.onDisconnected = { [weak self] env in self?.environmentClosed(env) }
+            env.rpc.onProtocolError = { [weak self] reason, raw in self?.reportProtocolBreak("\(env.label): \(reason)", raw: raw) }
+            linked[id] = env
+            env.start()
+        }
+        for (id, env) in linked where !seen.contains(id) {
+            env.stop()
+            linked[id] = nil
+            dropEnvironment(id)
+        }
+    }
+
+    /// Asks the local server for a pairing with a linked environment. A token from before
+    /// linked environments lacks `access:write`; mint one with it once, then ask again.
+    private func requestPairing(_ environmentId: String) async throws -> JSON {
+        do {
+            return try await rpc.call("peerLinks.pairClient", ["environmentId": .string(environmentId)])
+        } catch let error as AppError where "\(error)".contains("missing required scope") && !reissuedForScopes {
+            reissuedForScopes = true
+            Auth.clear()
+            _ = try await Auth.issueToken()
+            // Reconnects the local socket with the new token; linked environments start again.
+            reconnectNow()
+            throw AppError.auth("asked T3 for a token that may pair linked environments; trying again")
+        }
+    }
+    @ObservationIgnored private var reissuedForScopes = false
+
+    private func environmentClosed(_ env: LinkedEnvironment) {
+        if threadStreamRpc === env.rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
+        env.shellStreamId = nil
+        dropEnvironment(env.id)
+    }
+
+    /// Removes an environment's chats and projects from the list.
+    private func dropEnvironment(_ environmentId: String) {
+        let prefix = environmentId + "/"
+        threads = threads.filter { !$0.key.hasPrefix(prefix) }
+        projects = projects.filter { !$0.key.hasPrefix(prefix) }
+        shellVersion &+= 1
+    }
+
+    /// The socket for an environment: the local one or a connected linked one.
+    func rpc(for environmentId: String?) -> RPCClient? {
+        guard let environmentId else { return nil }
+        if environmentId == self.environmentId { return rpc }
+        guard let env = linked[environmentId], env.state == .connected else { return nil }
+        return env.rpc
+    }
+
+    /// The base address and token for an environment's HTTP routes, such as attachments.
+    private func http(for environmentId: String?) -> (URL, String?)? {
+        guard let environmentId else { return nil }
+        if environmentId == self.environmentId { return runtime.map { ($0.httpBase, Auth.storedToken()) } }
+        guard let env = linked[environmentId], let base = env.httpBase else { return nil }
+        return (base, env.token)
+    }
+
+    /// What a chat's environment is called, for chats on a linked environment only.
+    func environmentLabel(for thread: JSON?) -> String? { thread?["environmentLabel"].string }
 
     // MARK: - Shell stream
 
     private func subscribeShell() {
-        threads = [:]
-        projects = [:]
-        shellVersion &+= 1
+        guard let env = environmentId else { return }
+        dropEnvironment(env)
         shellStreamId = rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self] item in
-            self?.applyShell(item)
+            self?.applyShell(item, environmentId: env)
         }, onEnd: { [weak self] result in
             if case .failure(let e) = result, self?.rpc.isOpen == true { self?.fail("shell stream ended: \(e)") }
         })
     }
 
-    private func applyShell(_ item: JSON) {
+    private func subscribeShell(of env: LinkedEnvironment) {
+        dropEnvironment(env.id)
+        env.shellStreamId = env.rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self, weak env] item in
+            guard let self, let env else { return }
+            self.applyShell(item, environmentId: env.id, label: env.label)
+        }, onEnd: { [weak env] result in
+            // The stream ended with the socket open: start over on that environment.
+            if case .failure = result, let env, env.rpc.isOpen { env.reconnectNow() }
+        })
+    }
+
+    /// Adds where a row lives, so the list can name its machine and commands find its socket.
+    private static func scoped(_ row: [String: JSON], environmentId: String, label: String?) -> JSON {
+        var row = row
+        row["key"] = .string(key(environmentId, row["id"]?.string ?? ""))
+        row["environmentId"] = .string(environmentId)
+        if let label { row["environmentLabel"] = .string(label) }
+        return .object(row)
+    }
+
+    /// `label` is set for a linked environment, nil for the local one.
+    private func applyShell(_ item: JSON, environmentId env: String, label: String? = nil) {
         switch item["kind"].string {
         case "snapshot":
             let snap = item["snapshot"]
@@ -216,19 +344,20 @@ final class Store {
             // A snapshot arrives in parts, and parts can carry different sequences (some
             // only projects). Merge every part; the lists were cleared when this
             // subscription started, and removals arrive as thread.removed events.
-            for t in ts { if let id = t["id"].string { threads[id] = t } }
-            for p in ps { if let id = p["id"].string { projects[id] = p } }
+            for t in ts { if let o = t.object, let id = o["id"]?.string { threads[Self.key(env, id)] = Self.scoped(o, environmentId: env, label: label) } }
+            for p in ps { if let o = p.object, let id = o["id"]?.string { projects[Self.key(env, id)] = Self.scoped(o, environmentId: env, label: label) } }
         case "thread.updated":
             guard let t = item["thread"].object, let id = t["id"]?.string else { return }
-            let old = threads[id]
-            if item["location"].string == "active" { threads[id] = .object(t) } else { threads[id] = nil }
-            noticeTransition(id: id, old: old, new: threads[id])
+            let key = Self.key(env, id)
+            let old = threads[key]
+            if item["location"].string == "active" { threads[key] = Self.scoped(t, environmentId: env, label: label) } else { threads[key] = nil }
+            noticeTransition(id: key, old: old, new: threads[key])
         case "thread.removed":
-            if let id = item["threadId"].string { threads[id] = nil }
+            if let id = item["threadId"].string { threads[Self.key(env, id)] = nil }
         case "project.updated":
-            if let p = item["project"].object, let id = p["id"]?.string { projects[id] = .object(p) }
+            if let p = item["project"].object, let id = p["id"]?.string { projects[Self.key(env, id)] = Self.scoped(p, environmentId: env, label: label) }
         case "project.removed":
-            if let id = item["projectId"].string { projects[id] = nil }
+            if let id = item["projectId"].string { projects[Self.key(env, id)] = nil }
         default:
             break // "synchronized", "snapshot-required", or a kind added later
         }
@@ -265,6 +394,7 @@ final class Store {
         let rows = Array(sidebarThreads.filter { t in
             q.isEmpty || (t["title"].string ?? "").lowercased().contains(q)
                 || (projectTitle(for: t) ?? "").lowercased().contains(q)
+                || (t["environmentLabel"].string ?? "").lowercased().contains(q)
         }.prefix(60))
         pickerCache = (shellVersion, q, rows)
         return rows
@@ -297,7 +427,7 @@ final class Store {
 
     private func pinnedBefore(_ a: JSON, _ b: JSON) -> Bool {
         switch (a["pinOrderKey"].string, b["pinOrderKey"].string) {
-        case let (ka?, kb?): return ka != kb ? ka < kb : (a["id"].string ?? "") < (b["id"].string ?? "")
+        case let (ka?, kb?): return ka != kb ? ka < kb : (a["key"].string ?? "") < (b["key"].string ?? "")
         case (.some, nil): return true
         case (nil, .some): return false
         case (nil, nil): return (a["createdAt"].epochMs ?? 0) > (b["createdAt"].epochMs ?? 0)
@@ -307,7 +437,7 @@ final class Store {
     private func activeBefore(_ a: JSON, _ b: JSON) -> Bool {
         let anchor = { (t: JSON) in max(t["createdAt"].epochMs ?? 0, t["unsettledAt"].epochMs ?? 0) }
         switch (a["activeOrderKey"].string, b["activeOrderKey"].string) {
-        case let (ka?, kb?): return ka != kb ? ka < kb : (a["id"].string ?? "") < (b["id"].string ?? "")
+        case let (ka?, kb?): return ka != kb ? ka < kb : (a["key"].string ?? "") < (b["key"].string ?? "")
         case (nil, .some): return true
         case (.some, nil): return false
         case (nil, nil): return anchor(a) > anchor(b)
@@ -326,22 +456,33 @@ final class Store {
 
     var targetThread: JSON? { targetThreadId.flatMap { threads[$0] } }
 
-    func projectTitle(for thread: JSON?) -> String? {
-        thread.flatMap { projects[$0["projectId"].string ?? ""]?["title"].string }
+    func project(for thread: JSON?) -> JSON? {
+        thread.flatMap { projects[Self.projectKey(for: $0)] }
+    }
+
+    func projectTitle(for thread: JSON?) -> String? { project(for: thread)?["title"].string }
+
+    /// The focused chat's environment and its id there.
+    private var target: (environmentId: String, threadId: String, rpc: RPCClient)? {
+        guard let t = targetThread, let env = t["environmentId"].string, let id = t["id"].string,
+              let rpc = rpc(for: env), rpc.isOpen else { return nil }
+        return (env, id, rpc)
     }
 
     private func syncThreadSubscription() {
-        guard rpc.isOpen, let target = targetThreadId, target != subscribedThreadId else { return }
-        if let old = threadStreamId { rpc.interrupt(old) }
-        subscribedThreadId = target
+        guard let key = targetThreadId, key != subscribedThreadId, let target else { return }
+        if let old = threadStreamId { threadStreamRpc?.interrupt(old) }
+        subscribedThreadId = key
+        threadStreamRpc = target.rpc
         messages = [:]; runtimeRequests = [:]; requestItems = [:]
-        threadStreamId = rpc.subscribe("orchestration.subscribeThread",
-                                       ["threadId": .string(target), "acceptBoundedSnapshot": true],
-                                       onValue: { [weak self] item in self?.applyThread(item, threadId: target) },
+        threadStreamId = target.rpc.subscribe("orchestration.subscribeThread",
+                                       ["threadId": .string(target.threadId), "acceptBoundedSnapshot": true],
+                                       onValue: { [weak self] item in self?.applyThread(item, threadId: key) },
                                        onEnd: { [weak self] _ in
-                                           guard let self, self.subscribedThreadId == target else { return }
+                                           guard let self, self.subscribedThreadId == key else { return }
                                            self.subscribedThreadId = nil
                                            self.threadStreamId = nil
+                                           self.threadStreamRpc = nil
                                        })
     }
 
@@ -483,16 +624,17 @@ final class Store {
     @ObservationIgnored private var loadingImages = Set<String>()
 
     func loadImage(_ attachmentId: String) async {
+        let env = targetThread?["environmentId"].string
         guard !Store.demo, attachmentImages[attachmentId] == nil, !loadingImages.contains(attachmentId),
-              let runtime else { return }
+              let rpc = rpc(for: env), let (base, token) = http(for: env) else { return }
         loadingImages.insert(attachmentId)
         defer { loadingImages.remove(attachmentId) }
         guard let result = try? await rpc.call("assets.createUrl", [
             "resource": ["_tag": "attachment", "attachmentId": .string(attachmentId), "disposition": "inline"],
         ]), let relative = result["relativeUrl"].string,
-              let url = URL(string: relative, relativeTo: runtime.httpBase) else { return }
+              let url = URL(string: relative, relativeTo: base) else { return }
         var request = URLRequest(url: url)
-        if let token = Auth.storedToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         guard let (data, _) = try? await URLSession.shared.data(for: request), let image = NSImage(data: data) else { return }
         attachmentImages[attachmentId] = image
     }
@@ -541,7 +683,7 @@ final class Store {
     func send(_ text: String, steer: Bool = false, images: [Data] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty else { return }
-        guard let threadId = targetThreadId else {
+        guard let key = targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
                 : "No thread to send to. Pin one in T3 or pick one with ⌘K."
@@ -552,6 +694,12 @@ final class Store {
             onDemoSend?(trimmed, steer, images.count)
             return
         }
+        guard let target else {
+            lastSendError = "\(environmentLabel(for: targetThread) ?? "T3") is not connected. Trying again…"
+            linked[targetThread?["environmentId"].string ?? ""]?.reconnectNow()
+            return
+        }
+        let threadId = target.threadId
         let id = UUID().uuidString.lowercased()
         lastSendError = nil
         var command: [String: JSON] = [
@@ -571,10 +719,10 @@ final class Store {
         }
         do {
             if !images.isEmpty {
-                command["attachments"] = try await uploadImages(images, threadId: threadId, messageId: id)
+                command["attachments"] = try await uploadImages(images, threadId: threadId, messageId: id, rpc: target.rpc)
             }
-            _ = try await rpc.call("orchestration.dispatchCommand", .object(command))
-            awaitingThreadId = threadId
+            _ = try await target.rpc.call("orchestration.dispatchCommand", .object(command))
+            awaitingThreadId = key
         } catch {
             handleCommandError(error)
         }
@@ -583,7 +731,7 @@ final class Store {
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
     /// the attachment records `message.dispatch` takes.
-    private func uploadImages(_ images: [Data], threadId: String, messageId: String) async throws -> JSON {
+    private func uploadImages(_ images: [Data], threadId: String, messageId: String, rpc: RPCClient) async throws -> JSON {
         let uploads: [JSON] = images.enumerated().map { i, png in
             [
                 "type": "image",
@@ -603,26 +751,28 @@ final class Store {
     }
 
     func respond(decision: String) async {
-        guard let req = pendingRequest, let threadId = targetThreadId else { return }
+        guard let req = pendingRequest else { return }
         if Store.demo { onDemoRespond?(decision); return }
+        guard let threadId = target?.threadId else { return }
         await dispatch(["type": "runtime-request.respond", "commandId": .string(UUID().uuidString.lowercased()),
                         "threadId": .string(threadId), "requestId": .string(req.id), "decision": .string(decision)])
     }
 
     func answer(_ answers: [String: JSON]) async {
-        guard let req = pendingRequest, let threadId = targetThreadId else { return }
+        guard let req = pendingRequest, let threadId = target?.threadId else { return }
         await dispatch(["type": "runtime-request.respond", "commandId": .string(UUID().uuidString.lowercased()),
                         "threadId": .string(threadId), "requestId": .string(req.id), "answers": .object(answers)])
     }
 
     func interruptRun() async {
-        guard let t = targetThread, let threadId = t["id"].string, let runId = t["activeRunId"].string else { return }
+        guard let threadId = target?.threadId, let runId = targetThread?["activeRunId"].string else { return }
         await dispatch(["type": "run.interrupt", "commandId": .string(UUID().uuidString.lowercased()),
                         "threadId": .string(threadId), "runId": .string(runId)])
     }
 
     private func dispatch(_ command: JSON) async {
         lastSendError = nil
+        guard let rpc = target?.rpc else { lastSendError = "Not connected to the chat's environment"; return }
         do { _ = try await rpc.call("orchestration.dispatchCommand", command) }
         catch { handleCommandError(error) }
     }
@@ -679,14 +829,14 @@ final class Store {
     /// Opens the focused chat in T3. With `prompt`, T3 fills its chat box with it (its own
     /// prompt-link format; T3 asks first if that chat already has a draft).
     func openTargetInT3(prompt: String? = nil) {
-        guard let id = targetThreadId, environmentId != nil else {
+        // A linked environment's chat opens under that environment's id, as T3 shows it.
+        guard let t = targetThread, let id = t["id"].string, let env = t["environmentId"].string else {
             runtime?.app?.activate()
             return
         }
         // Thread ids can contain ":" (e.g. "mcp:…"), so encode each path segment.
         let segment = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/:"))) ?? s }
-        guard let env = environmentId,
-              var comps = URLComponents(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))")
+        guard var comps = URLComponents(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))")
         else { return }
         if let prompt, !prompt.isEmpty {
             comps.queryItems = [URLQueryItem(name: "prompt", value: String(prompt.prefix(7900)))]

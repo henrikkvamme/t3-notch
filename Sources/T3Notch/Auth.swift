@@ -31,11 +31,15 @@ enum Auth {
         try? FileManager.default.removeItem(at: tokenFile)
     }
 
+    /// The scopes the overlay asks for. `access:write` is what T3 requires to ask a linked
+    /// environment for a pairing for this client (`peerLinks.pairClient`); the linked
+    /// environment then gives the overlay its own session there, see `LinkedEnvironments.swift`.
+    static let scopes = ["orchestration:read", "orchestration:operate", "access:write"]
+
     /// Runs `t3 auth session issue` with the narrowest scopes the overlay needs.
     static func issueToken() async throws -> String {
-        let args = ["auth", "session", "issue",
-                    "--scope", "orchestration:read", "--scope", "orchestration:operate",
-                    "--ttl", "30d", "--label", label, "--token-only"]
+        let args = ["auth", "session", "issue"] + scopes.flatMap { ["--scope", $0] }
+            + ["--ttl", "30d", "--label", label, "--token-only"]
         let out = try await runCLI(args)
         let token = out.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty, !token.contains(" ") else {

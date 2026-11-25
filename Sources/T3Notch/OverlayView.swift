@@ -189,7 +189,10 @@ struct OverlayView: View {
 
     private var header: some View {
         let title = store.targetThread?["title"].string
-        let project = store.projectTitle(for: store.targetThread)
+        let machine = store.environmentLabel(for: store.targetThread)
+        let project = [store.projectTitle(for: store.targetThread), machine].compactMap { $0 }
+            .joined(separator: " · ")
+        let subtitle: String? = project.isEmpty ? nil : project
         return HStack(spacing: 8) {
             if let title {
                 StatusDotGlyph(indicator: store.indicator == .hidden ? .idle : store.indicator)
@@ -197,7 +200,7 @@ struct OverlayView: View {
                     .contentTransition(.interpolate)
                     .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
                     .transition(.blurReplace)
-                if let project {
+                if let project = subtitle {
                     Text(project).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                         .transition(.blurReplace)
                 }
@@ -368,7 +371,7 @@ struct OverlayView: View {
         let list = store.pickerRows(query: ui.pickerQuery)
         guard list.indices.contains(index) else { return }
         withAnimation(Motion.content) {
-            store.focusedThreadId = list[index]["id"].string
+            store.focusedThreadId = list[index]["key"].string
             ui.pickerOpen = false
             ui.pickerQuery = ""
             ui.pickerIndex = 0
@@ -501,7 +504,7 @@ struct OverlayView: View {
                 .textSelection(.enabled)
         } else {
             ReplyContent(text: text, baseDir: store.targetThread?["worktreePath"].string
-                         ?? store.projects[store.targetThread?["projectId"].string ?? ""]?["workspaceRoot"].string)
+                         ?? store.project(for: store.targetThread)?["workspaceRoot"].string)
         }
     }
 

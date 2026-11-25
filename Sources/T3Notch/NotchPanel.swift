@@ -487,7 +487,7 @@ final class PanelController {
         let rows = store.pickerRows(query: ui.pickerQuery)
         guard rows.indices.contains(ui.pickerIndex) else { return }
         withAnimation(Motion.content) {
-            store.focusedThreadId = rows[ui.pickerIndex]["id"].string
+            store.focusedThreadId = rows[ui.pickerIndex]["key"].string
             ui.pickerOpen = false
             ui.pickerQuery = ""
         }
@@ -498,7 +498,7 @@ final class PanelController {
         withAnimation(Motion.content) {
             ui.pickerOpen = open
             // Start on the focused chat, so ⏎ keeps it.
-            ui.pickerIndex = min(store.sidebarThreads.firstIndex { $0["id"].string == store.targetThreadId } ?? 0, 59)
+            ui.pickerIndex = min(store.sidebarThreads.firstIndex { $0["key"].string == store.targetThreadId } ?? 0, 59)
             if !open { ui.pickerQuery = "" }
         }
         focusTextField()

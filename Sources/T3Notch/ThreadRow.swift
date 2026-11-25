@@ -5,6 +5,8 @@ import SwiftUI
 /// 1. project icon, pin, project name, and the status or time since the last activity
 /// 2. title, with the provider glyph at the end when there is no third line
 /// 3. branch, or the machine for chats without a project, with the provider glyph
+///
+/// A chat on a linked environment also names that machine on line 1, as T3's sidebar does.
 struct ThreadRow: View {
     let thread: JSON
     let project: JSON?
@@ -19,6 +21,14 @@ struct ThreadRow: View {
                 }
                 Text(project?["title"].string ?? "No project")
                     .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                if let machine = linkedMachine {
+                    Label(machine, systemImage: "server.rack")
+                        .labelStyle(.titleAndIcon)
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(.white.opacity(0.08)))
+                        .lineLimit(1).fixedSize()
+                }
                 Spacer(minLength: 6)
                 trailingStatus
             }
@@ -90,6 +100,9 @@ struct ThreadRow: View {
 
     private var branch: String? { thread["branch"].string }
 
+    /// The linked environment the chat runs on; nil for chats on this Mac.
+    private var linkedMachine: String? { thread["environmentLabel"].string }
+
     /// T3's "No project" is a scratch workspace under ~/.t3/scratch.
     private var isScratch: Bool {
         project == nil || (project?["workspaceRoot"].string ?? "").hasSuffix("/.t3/scratch")
@@ -98,7 +111,7 @@ struct ThreadRow: View {
     /// The branch, or for a scratch chat, the machine it runs on.
     private var metaText: String? {
         if let branch { return branch }
-        return isScratch ? Self.machineName : nil
+        return isScratch ? (linkedMachine ?? Self.machineName) : nil
     }
 
     @ViewBuilder private var providerGlyph: some View {
