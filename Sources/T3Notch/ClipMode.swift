@@ -179,7 +179,7 @@ final class ClipState {
     /// the level shown.
     var depth = 0
     /// The element you scrolled to. It stays picked while it is under the pointer, even when
-    /// the chain below it gets longer or shorter.
+    /// the chain below it gets longer or shorter. None before the first scroll.
     private var anchor: CGRect?
     var drag: CGRect?
     /// Where the pointer is (global), for the dot cursor.
@@ -259,8 +259,9 @@ final class ClipState {
             return
         }
         depth = target
-        // Levels 0 and −1 mean "the smallest element" and "the window" wherever you point.
-        anchor = target > 0 ? next : nil
+        // An element you scroll to stays picked while it is under the pointer. Level −1 means
+        // "the window" wherever you point; before any scroll, level 0 is the smallest element.
+        anchor = target >= 0 ? next : nil
         haptics.step(depth: target)
     }
 
