@@ -560,12 +560,15 @@ final class Store {
     }
 
     @ObservationIgnored private var shellSaveTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var savedShells = Set<String>()
 
-    /// Writes a linked environment's rows to disk soon, at most once in five seconds.
+    /// Writes a linked environment's rows to disk: soon after the first snapshot, then at
+    /// most once in a minute. The rows can be megabytes, and a busy environment changes often.
     private func saveShellSoon(_ environmentId: String) {
         guard shellSaveTasks[environmentId] == nil else { return }
+        let first = !savedShells.contains(environmentId)
         shellSaveTasks[environmentId] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(first ? 3 : 60))
             guard let self else { return }
             self.shellSaveTasks[environmentId] = nil
             // Not while a snapshot is only partly in, and not after the link is gone.
@@ -575,6 +578,7 @@ final class Store {
                 "threads": .array(self.threads.filter { $0.key.hasPrefix(prefix) }.map(\.value)),
                 "projects": .array(self.projects.filter { $0.key.hasPrefix(prefix) }.map(\.value)),
             ])
+            self.savedShells.insert(environmentId)
             let data = rows.encoded()
             Task.detached(priority: .utility) { ShellCache.write(environmentId, data) }
         }
