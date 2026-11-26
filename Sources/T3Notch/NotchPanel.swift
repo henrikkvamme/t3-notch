@@ -506,8 +506,6 @@ final class PanelController {
             return true
         }
         let cmd = event.modifierFlags.contains(.command)
-        let ctrl = event.modifierFlags.contains(.control)
-        let shift = event.modifierFlags.contains(.shift)
         let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
         // The chat list's shortcut is rebindable (⌘K by default).
         if Settings.showChatsKey.matches(event) {
