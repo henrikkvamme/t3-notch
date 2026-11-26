@@ -448,9 +448,15 @@ struct OverlayView: View {
         }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         ui.sending += 1
+        let to = store.targetThreadId
         Task {
-            await store.send(text, steer: Settings.enterSteers, clips: clips)
+            let sent = await store.send(text, steer: Settings.enterSteers, clips: clips, to: to)
             ui.sending -= 1
+            // Not sent: the message and its selections come back.
+            if !sent {
+                ui.draft = ui.draft.isEmpty ? text : text + "\n" + ui.draft
+                ui.clips = clips + ui.clips
+            }
             store.focusLastOpened()
         }
         ui.onClose?() // sent: tuck the island away and hand focus back

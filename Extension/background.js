@@ -135,7 +135,17 @@ async function describe(msg) {
 // what React, Vue or Svelte keep on it in development: component names (nearest first) and
 // the file and line that made it.
 function sourceOf(mark) {
-  const el = document.querySelector(`[data-t3n-pick="${mark}"]`);
+  // The element can be inside open shadow roots, where the document's own query does not look.
+  const find = (root) => {
+    const hit = root.querySelector(`[data-t3n-pick="${mark}"]`);
+    if (hit) return hit;
+    for (const host of root.querySelectorAll("*")) {
+      const inner = host.shadowRoot && find(host.shadowRoot);
+      if (inner) return inner;
+    }
+    return null;
+  };
+  const el = find(document);
   if (!el) return null;
   el.removeAttribute("data-t3n-pick");
   const components = [];
