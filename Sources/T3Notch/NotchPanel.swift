@@ -137,6 +137,11 @@ final class PanelController {
             MainActor.assumeIsolated { self?.trackHeldKeys(event) }
             return event
         }
+        // A draft, selections or a running select mode belong to the focused chat.
+        store.holdsTarget = { [weak self] in
+            guard let self else { return false }
+            return !self.ui.draft.isEmpty || !self.ui.clips.isEmpty || self.clipper != nil
+        }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
@@ -152,6 +157,8 @@ final class PanelController {
 
     func expand() {
         peekHideTask?.cancel()
+        // A chat opened in T3 while the island held work for another chat.
+        store.focusLastOpened()
         store.markReplySeen()
         let wasHidden = ui.mode == .hidden
         if wasHidden { place(on: NotchGeometry.screenUnderMouse()) }
@@ -223,6 +230,7 @@ final class PanelController {
         }
         panel.ignoresMouseEvents = true
         stopMouseTimer()
+        store.focusLastOpened() // as in `expand`, now that a sent draft is out of the island
         // Take the canvas away once the island has shrunk into the notch.
         orderOutTask?.cancel()
         orderOutTask = Task { [weak self] in
