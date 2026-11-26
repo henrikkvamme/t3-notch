@@ -19,6 +19,8 @@ final class OverlayUIState {
     var landing = false
     /// That place in the island's window, top-left origin.
     var landingSlot: CGRect?
+    /// The selection whose comment is open under the row.
+    var editingClip: UUID?
     var draft = ""
     /// Messages on their way to T3. They left the draft, but the focused chat must stay until
     /// each one has its chat (see `Store.holdsTarget`).
@@ -508,7 +510,7 @@ struct OverlayView: View {
         .animation(Motion.content, value: ui.missingPermissions)
     }
 
-    /// Clips waiting to be sent; click one to remove it.
+    /// Clips waiting to be sent. A click on one opens its comment; its ✕ removes it.
     private var clipRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -520,29 +522,48 @@ struct OverlayView: View {
                         .frame(width: 64, height: 44)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.15)))
-                        .overlay {
-                            // A press removes the clip.
-                            if hovered {
-                                Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
-                                    .frame(width: 22, height: 22)
-                                    .glassEffect(.regular, in: .circle)
-                                    .transition(.blurReplace.combined(with: .scale(0.6)))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.accentColor, lineWidth: 2).opacity(ui.editingClip == clip.id ? 1 : 0))
+                        .overlay(alignment: .bottomLeading) {
+                            // This selection has a comment.
+                            if !clip.comment.isEmpty {
+                                Image(systemName: "text.bubble.fill").font(.system(size: 9))
+                                    .padding(3)
+                                    .background(.black.opacity(0.6), in: .rect(cornerRadius: 5))
+                                    .padding(3)
+                                    .transition(.opacity)
                             }
                         }
                         .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(Motion.content) { ui.editingClip = ui.editingClip == clip.id ? nil : clip.id }
+                            ui.onRequestFocus?()
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            // The ✕ removes the clip.
+                            if hovered {
+                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                                    .frame(width: 18, height: 18)
+                                    .glassEffect(.regular, in: .circle)
+                                    .contentShape(Circle())
+                                    .onTapGesture {
+                                        withAnimation(Motion.content) {
+                                            if let i = ui.clips.firstIndex(of: clip) {
+                                                ui.removedClips.append((clip, i))
+                                                ui.draftAtClipRemoval = ui.draft
+                                                ui.clips.remove(at: i)
+                                            }
+                                            if hoveredClip == clip.id { hoveredClip = nil }
+                                            if ui.editingClip == clip.id { ui.editingClip = nil }
+                                        }
+                                    }
+                                    .offset(x: 6, y: -6)
+                                    .transition(.blurReplace.combined(with: .scale(0.6)))
+                            }
+                        }
                         .onHover { inside in
                             withAnimation(Motion.snappy) {
                                 if inside { hoveredClip = clip.id } else if hoveredClip == clip.id { hoveredClip = nil }
-                            }
-                        }
-                        .onTapGesture {
-                            withAnimation(Motion.content) {
-                                if let i = ui.clips.firstIndex(of: clip) {
-                                    ui.removedClips.append((clip, i))
-                                    ui.draftAtClipRemoval = ui.draft
-                                    ui.clips.remove(at: i)
-                                }
-                                if hoveredClip == clip.id { hoveredClip = nil }
                             }
                         }
                         .transition(.blurReplace.combined(with: .scale(0.8)))
@@ -556,8 +577,8 @@ struct OverlayView: View {
                         .transition(.opacity)
                 }
             }
-            // A larger preview of the hovered clip, under the row.
-            if let clip = ui.clips.first(where: { $0.id == hoveredClip }) {
+            // A larger preview of the hovered clip, or of the one whose comment is open.
+            if let clip = ui.clips.first(where: { $0.id == hoveredClip }) ?? ui.clips.first(where: { $0.id == ui.editingClip }) {
                 Image(nsImage: clip.thumbnail)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -566,7 +587,25 @@ struct OverlayView: View {
                     .id(clip.id)
                     .transition(.blurReplace)
             }
+            // The open selection's comment. ⏎ and Esc go back to the message.
+            if let i = ui.clips.firstIndex(where: { $0.id == ui.editingClip }) {
+                TextField("Comment on this selection", text: Binding(
+                    get: { ui.clips.indices.contains(i) ? ui.clips[i].comment : "" },
+                    set: { if ui.clips.indices.contains(i) { ui.clips[i].comment = $0 } }), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .lineLimit(1...4)
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .background(.white.opacity(0.08), in: .rect(cornerRadius: 10))
+                    .onSubmit {
+                        withAnimation(Motion.content) { ui.editingClip = nil }
+                        ui.onRequestFocus?()
+                    }
+                    .id(ui.editingClip)
+                    .transition(.blurReplace)
+            }
         }
+        .animation(Motion.content, value: ui.editingClip)
         .animation(Motion.content, value: ui.clips)
         .animation(Motion.content, value: ui.landing)
         .animation(Motion.content, value: hoveredClip)

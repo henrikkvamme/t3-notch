@@ -367,7 +367,15 @@ final class PanelController {
     /// Focuses the visible text field; returns false when there is none.
     @discardableResult
     private func focusTextFieldNow() -> Bool {
-        guard let field = panel.contentView?.firstEditableText else { return false }
+        var target = panel.contentView?.firstEditableText
+        // A selection's comment is open: it sits just above the message field, the lowest one.
+        // A comment that just closed can still be in the view while it fades: then the message
+        // field, the lowest, is the one.
+        if store.pendingRequest == nil, let fields = panel.contentView?.editableTexts, fields.count > 1 {
+            let byHeight = fields.sorted { $0.convert($0.bounds, to: nil).midY < $1.convert($1.bounds, to: nil).midY }
+            target = byHeight[ui.editingClip != nil ? 1 : 0]
+        }
+        guard let field = target else { return false }
         let ok = panel.makeFirstResponder(field)
         updateCursor()
         return ok
@@ -399,6 +407,10 @@ final class PanelController {
         switch event.keyCode {
         case 53: // Esc
             if ui.pickerOpen { setPicker(false); return true }
+            if let open = ui.editingClip { // back to the message
+                withAnimation(Motion.content) { ui.editingClip = nil }
+                if ui.clips.contains(where: { $0.id == open }) { focusTextField(); return true }
+            }
             if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
         case 6 where (cmd || ctrl) && !shift: // ⌘Z / ⌃Z: restore a removed clip, else normal undo
@@ -573,8 +585,10 @@ final class PanelController {
             // The selection is context for the chat: it sits in the island as a chip, and the
             // island's input has the keyboard. `land` opened the island when the click came.
             _ = (steer, to)
+            // The comment stays with its selection: a click on the chip shows and edits it.
+            var clip = clip
+            clip.comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
             withAnimation(Motion.snappy) { ui.landing = false; ui.clips.append(clip) }
-            if !comment.isEmpty { ui.draft = ui.draft.isEmpty ? comment : ui.draft + "\n" + comment }
             if ui.mode != .expanded { expand() } else { panel.makeKey(); focusTextField() }
             onSelectEnded?()
             return
@@ -719,6 +733,15 @@ final class PanelController {
 }
 
 extension NSView {
+    /// Every visible text field inside this view that can be typed in.
+    var editableTexts: [NSView] {
+        subviews.flatMap { sub -> [NSView] in
+            if let tf = sub as? NSTextField, tf.isEditable, !tf.isHidden { return [tf] }
+            if let tv = sub as? NSTextView, tv.isEditable, !tv.isHidden { return [tv] }
+            return sub.editableTexts
+        }
+    }
+
     /// The first visible text field inside this view that can be typed in.
     var firstEditableText: NSView? {
         for sub in subviews {

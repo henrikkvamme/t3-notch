@@ -1117,7 +1117,8 @@ final class Store {
             let n = i + 1
             guard let ctx = clip.context else {
                 images.append(image("selection-\(n).png", clip.png))
-                labels.append("Selection \(n)")
+                // No element record to carry the comment: it names the picture's chip.
+                labels.append(clip.comment.isEmpty ? "Selection \(n)" : clip.comment)
                 continue
             }
             // One picture: the selection with what is around it. The whole window costs the
@@ -1126,7 +1127,7 @@ final class Store {
             images.append(image(name, p.window ? ctx.surroundPNG() ?? clip.png : clip.png))
             labels.append(ctx.page.flatMap { $0.name ?? $0.text } ?? ctx.element.flatMap { $0.name ?? $0.description }
                           ?? ctx.elementText ?? "Selection \(n)")
-            elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name))
+            elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name, comment: clip.comment))
         }
         return (images, labels, elements)
     }

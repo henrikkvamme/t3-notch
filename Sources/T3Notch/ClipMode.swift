@@ -12,6 +12,8 @@ struct Clip: Identifiable, Equatable {
     let png: Data
     let thumbnail: NSImage
     var context: PickContext?
+    /// What you wrote about this selection. It goes to the agent with the selection.
+    var comment = ""
 
     static func == (a: Clip, b: Clip) -> Bool { a.id == b.id }
 }
