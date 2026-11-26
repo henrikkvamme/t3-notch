@@ -70,10 +70,15 @@ final class Store {
     /// side: the chat opened last in T3 becomes the focused chat, unless a chat was picked in
     /// the island after that. `reportOpenToT3` is the other side.
     ///
+    /// Does nothing while the island holds work for the focused chat (`holdsTarget`), so a
+    /// prompt in the making is not sent to another chat. The island calls this again when it
+    /// shows and hides.
+    ///
     /// T3 moves a chat's `openedAt` at most once in 10 minutes (`THREAD_OPEN_DEDUPE_MS`), and
     /// sends nothing for an open inside that time. So a switch back to a chat that was opened
     /// less than 10 minutes before is not seen here.
     func focusLastOpened() {
+        guard holdsTarget?() != true else { return }
         guard let opened = lastOpenedInT3, opened.at > focusedAt || targetThreadId == nil,
               opened.id != focusedThreadId else { return }
         followingT3 = true
@@ -84,28 +89,58 @@ final class Store {
         setFocusedAt(opened.at)
     }
 
+    /// Set by the island: true while it holds a draft, selections, or a running select mode.
+    var holdsTarget: (() -> Bool)?
+
     /// True while `focusLastOpened` sets the focused chat.
     private var followingT3 = false
     private var openReport: Task<Void, Never>?
+    /// Chats this app reported to T3 as opened, with the time it sent each report.
+    private var ownOpens: [String: Date] = [:]
 
     /// The island side: tells T3 that the focused chat was opened (`thread.visit` with
     /// `opened`, as T3 sends when a chat is opened there), so it is T3's last opened chat too.
-    /// T3 also counts the chat as read. Waits a moment first: ⇥ through the chats in select
+    /// The read mark stays where it is. Waits a moment first: ⇥ through the chats in select
     /// mode reports only the chat it stops on. A failure is silent and is not sent again.
     private func reportOpenToT3() {
         openReport?.cancel()
         guard !Store.demo, let id = focusedThreadId else { return }
         openReport = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled, let self, self.targetThreadId == id else { return }
-            _ = try? await self.rpc.call("orchestration.dispatchCommand", [
-                "type": "thread.visit",
-                "commandId": .string(UUID().uuidString.lowercased()),
-                "threadId": .string(id),
-                "visitedAt": .string(Self.visitStamp.string(from: self.focusedAt)),
-                "opened": true,
-            ])
+            guard !Task.isCancelled, let self, self.targetThreadId == id, let thread = self.threads[id]
+            else { return }
+            // `visitedAt` is the read mark. Send back the one T3 has, so the chat stays unread
+            // or read as it was. A chat with none gets the mark T3 itself sets on an open.
+            let visitedAt = thread["lastVisitedAt"].string ?? thread["updatedAt"].string
+                ?? Self.visitStamp.string(from: Date())
+            self.ownOpens[id] = Date()
+            // Not part of this task: a later pick cancels the wait above, not a sent report.
+            Task { [weak self] in
+                do {
+                    _ = try await self?.rpc.call("orchestration.dispatchCommand", [
+                        "type": "thread.visit",
+                        "commandId": .string(UUID().uuidString.lowercased()),
+                        "threadId": .string(id),
+                        "visitedAt": .string(visitedAt),
+                        "opened": true,
+                    ])
+                } catch {
+                    self?.ownOpens[id] = nil
+                }
+            }
         }
+    }
+
+    /// T3 recorded an open of a chat. For an open that this app reported, a chat picked in the
+    /// island since then is still the newer choice. Every other open is followed.
+    private func noticeOpen(id: String, at openedAt: JSON?) {
+        if let sent = ownOpens.removeValue(forKey: id), Date().timeIntervalSince(sent) < 10 {
+            if id != focusedThreadId, case .number(let ms)? = openedAt {
+                setFocusedAt(max(focusedAt, Date(timeIntervalSince1970: ms / 1000)))
+            }
+            return
+        }
+        focusLastOpened()
     }
 
     /// T3's `IsoDateTime`, with milliseconds like JavaScript's `toISOString`.
@@ -295,8 +330,8 @@ final class Store {
             let old = threads[id]
             if item["location"].string == "active" { threads[id] = .object(t) } else { threads[id] = nil }
             noticeTransition(id: id, old: old, new: threads[id])
-            // A chat opened in T3 just now.
-            if threads[id]?["opens"]["openedAt"] != old?["opens"]["openedAt"] { focusLastOpened() }
+            let openedAt = threads[id]?["opens"]["openedAt"]
+            if openedAt != old?["opens"]["openedAt"] { noticeOpen(id: id, at: openedAt) }
         case "thread.removed":
             if let id = item["threadId"].string { threads[id] = nil }
         case "project.updated":
