@@ -564,7 +564,8 @@ final class PanelController {
                 """)
             // No chat to send to: the island takes them and opens on the list of chats. The
             // tour sends nothing either: a first try must not start an agent.
-            guard !selectSendsNothing, !inTour, let to, Store.clipPlan([clip]) != nil else {
+            // That holds for the whole Select step, also with the island folded away.
+            guard !selectSendsNothing, ui.onboarding != .select, let to, Store.clipPlan([clip]) != nil else {
                 keep(clip, comment)
                 return
             }
