@@ -53,10 +53,22 @@ struct PickContext: Sendable {
     /// `windowPNG`'s size in pixels and its pixels per point.
     var windowPixels: CGSize = .zero
     var windowScale: CGFloat = 1
+    /// The reader left nodes out (depth, node count, child count or time limit).
+    var readTruncated = false
 
+    /// Trims and shortens to at most `max` UTF-16 units, as T3's schema counts string length
+    /// (JavaScript), cutting only between characters.
     static func clip(_ s: String, _ max: Int) -> String {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.count <= max ? t : String(t.prefix(max - 1)) + "…"
+        guard t.utf16.count > max else { return t }
+        var out = "", units = 0
+        for ch in t {
+            let n = ch.utf16.count
+            guard units + n <= max - 1 else { break } // room for the "…"
+            out.append(ch)
+            units += n
+        }
+        return out + "…"
     }
 
     /// The element's own text, or the text of its subtree, for the prompt.
@@ -96,20 +108,25 @@ enum PickReader {
                               appIconPNG: app?.icon.flatMap(iconPNG), windowTitle: windowTitle(windowID) ?? "",
                               windowFrame: windowFrame, clipFrame: clipFrame)
         if AXIsProcessTrusted() {
-            let axApp = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(axApp, 0.1)
+            // One deadline for every read. Each AX object gets its own short timeout too (a
+            // timeout set on one object does not carry over to the objects it returns), so a
+            // stalled app costs at most about the deadline plus one call.
+            let deadline = Date().addingTimeInterval(0.6)
+            let axApp = timed(AXUIElementCreateApplication(pid))
             if let element {
-                AXUIElementSetMessagingTimeout(element, 0.1)
-                ctx.path = ancestors(of: element).map { node(of: $0) }
-                var budget = 150
-                let deadline = Date().addingTimeInterval(0.4)
-                ctx.element = tree(of: element, depth: 4, budget: &budget, deadline: deadline)
-                ctx.url = url(above: element)
+                let element = timed(element)
+                let chain = ancestors(of: element, deadline: deadline)
+                ctx.path = chain.map { redacted(node(of: $0), isPick: false, visible: windowFrame) }
+                var budget = 150, cut = chain.count >= 40
+                ctx.element = tree(of: element, depth: 4, budget: &budget, deadline: deadline, cut: &cut, isPick: true,
+                                   visible: windowFrame)
+                ctx.readTruncated = cut
+                if Date() < deadline { ctx.url = url(above: element, deadline: deadline) }
                 if let title = ctx.path.first(where: { $0.role == kAXWindowRole as String })?.name, ctx.windowTitle.isEmpty {
                     ctx.windowTitle = title
                 }
             }
-            if let s = selectedText(axApp) { ctx.selectedText = PickContext.clip(s, 4000) }
+            if Date() < deadline, let s = selectedText(axApp) { ctx.selectedText = PickContext.clip(s, 4000) }
         }
         if let screenshot { windowImage(&ctx, screenshot: screenshot, screenshotRect: screenshotRect) }
         return ctx
@@ -132,11 +149,31 @@ enum PickReader {
         return rep.representation(using: .png, properties: [:])
     }
 
+    /// Sets the short messaging timeout on an AX object and returns it.
+    private static func timed(_ e: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(e, 0.1)
+        return e
+    }
+
+    /// Roles whose value is what someone typed. Only the picked element itself sends it.
+    private static let editableRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
+
+    /// Drops values that the user did not mean to send: a typed field's value unless it is the
+    /// picked element, and any value of an element outside the captured window (an offscreen
+    /// field can hold a token). Labels and states stay.
+    private static func redacted(_ n: PickElement, isPick: Bool, visible: CGRect) -> PickElement {
+        var n = n
+        let onScreen = n.frame.map { !$0.intersection(visible).isNull } ?? false
+        if !onScreen || (!isPick && (editableRoles.contains(n.role) || n.subrole == "AXSearchField")) { n.value = nil }
+        return n
+    }
+
     /// The element and its ancestors up to the window, outermost first.
-    private static func ancestors(of element: AXUIElement) -> [AXUIElement] {
+    private static func ancestors(of element: AXUIElement, deadline: Date) -> [AXUIElement] {
         var out = [element]
         var e = element
         for _ in 0..<40 {
+            guard Date() < deadline else { break }
             if string(e, kAXRoleAttribute) == kAXWindowRole as String { break }
             guard let p = parent(of: e) else { break }
             out.append(p)
@@ -145,13 +182,18 @@ enum PickReader {
         return out.reversed()
     }
 
-    private static func tree(of e: AXUIElement, depth: Int, budget: inout Int, deadline: Date) -> PickElement {
-        var n = node(of: e)
+    private static func tree(of e: AXUIElement, depth: Int, budget: inout Int, deadline: Date, cut: inout Bool,
+                             isPick: Bool, visible: CGRect) -> PickElement {
+        var n = redacted(node(of: e), isPick: isPick, visible: visible)
         budget -= 1
-        guard depth > 0, Date() < deadline else { return n }
-        for c in children(of: e) {
-            guard budget > 0, Date() < deadline else { break }
-            n.children.append(tree(of: c, depth: depth - 1, budget: &budget, deadline: deadline))
+        guard Date() < deadline else { cut = true; return n }
+        let (kids, more) = children(of: e)
+        if more { cut = true }
+        guard depth > 0 else { if !kids.isEmpty { cut = true }; return n }
+        for c in kids {
+            guard budget > 0, Date() < deadline else { cut = true; break }
+            n.children.append(tree(of: c, depth: depth - 1, budget: &budget, deadline: deadline, cut: &cut,
+                                   isPick: false, visible: visible))
         }
         return n
     }
@@ -194,11 +236,11 @@ enum PickReader {
     }
 
     /// The page URL of the web view around the element, or the window's document.
-    private static func url(above element: AXUIElement) -> String? {
+    private static func url(above element: AXUIElement, deadline: Date) -> String? {
         var e: AXUIElement? = element
         var document: String?
         for _ in 0..<40 {
-            guard let cur = e else { break }
+            guard let cur = e, Date() < deadline else { break }
             if string(cur, kAXRoleAttribute) == "AXWebArea", let u = urlValue(cur, kAXURLAttribute) { return sanitize(u) }
             if document == nil, let d = string(cur, kAXDocumentAttribute) { document = d }
             e = parent(of: cur)
@@ -212,18 +254,37 @@ enum PickReader {
         guard var c = URLComponents(string: s) else { return PickContext.clip(s, 2000) }
         c.user = nil
         c.password = nil
-        let host = c.host ?? ""
-        let local = c.scheme == "file" || host == "localhost" || host.hasSuffix(".local") || host.hasPrefix("127.")
-            || host.hasPrefix("10.") || host.hasPrefix("192.168.") || !host.contains(".")
-        if !local { c.query = nil; c.fragment = nil }
+        if !(c.scheme == "file" || isLocalHost(c.host ?? "")) { c.query = nil; c.fragment = nil }
         return PickContext.clip(c.string ?? s, 2000)
+    }
+
+    /// True for loopback, private and link-local IP addresses, `localhost`, `.local` names
+    /// and single-label names. A public name such as `10.example.com` is not local.
+    static func isLocalHost(_ raw: String) -> Bool {
+        let host = raw.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+        guard !host.isEmpty else { return false }
+        var v4 = in_addr()
+        if inet_pton(AF_INET, host, &v4) == 1 {
+            let b = withUnsafeBytes(of: v4.s_addr) { Array($0) } // network order
+            return b[0] == 127 || b[0] == 10 || (b[0] == 192 && b[1] == 168)
+                || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 169 && b[1] == 254)
+                || (b[0] == 100 && (64...127).contains(b[1])) // CGNAT, as Tailscale uses
+        }
+        var v6 = in6_addr()
+        if inet_pton(AF_INET6, host, &v6) == 1 {
+            let b = withUnsafeBytes(of: v6) { Array($0) }
+            let loopback = b.dropLast().allSatisfy { $0 == 0 } && b[15] == 1
+            return loopback || (b[0] & 0xFE) == 0xFC || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80)
+        }
+        if host.contains(":") { return false } // not a valid address
+        return host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") || !host.contains(".")
     }
 
     private static func selectedText(_ app: AXUIElement) -> String? {
         var focused: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
               let f = focused, CFGetTypeID(f) == AXUIElementGetTypeID() else { return nil }
-        let e = f as! AXUIElement
+        let e = timed(f as! AXUIElement)
         let role = string(e, kAXRoleAttribute), subrole = string(e, kAXSubroleAttribute)
         guard role != "AXSecureTextField", subrole != "AXSecureTextField",
               let s = string(e, kAXSelectedTextAttribute), !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -247,14 +308,16 @@ enum PickReader {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(e, kAXParentAttribute as CFString, &v) == .success,
               let v, CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
-        return (v as! AXUIElement)
+        return timed(v as! AXUIElement)
     }
 
-    private static func children(of e: AXUIElement) -> [AXUIElement] {
+    /// Up to 60 children, and whether there were more.
+    private static func children(of e: AXUIElement) -> ([AXUIElement], Bool) {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(e, kAXChildrenAttribute as CFString, &v) == .success,
-              let list = v as? [AnyObject] else { return [] }
-        return list.prefix(60).compactMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil }
+              let list = v as? [AnyObject] else { return ([], false) }
+        let kids = list.prefix(60).compactMap { CFGetTypeID($0) == AXUIElementGetTypeID() ? timed($0 as! AXUIElement) : nil }
+        return (kids, list.count > 60)
     }
 
     // MARK: Window image
@@ -339,7 +402,7 @@ extension PickContext {
         guard element != nil || !path.isEmpty, windowPNG != nil else { return nil }
         for limit in [nil, 12, 6, 3, 1, 0] as [Int?] {
             var node: JSON = element.map { subtree($0, limit: limit) } ?? .null
-            var truncated = limit != nil
+            var truncated = limit != nil || readTruncated
             for a in path.dropLast().reversed() { // the last path entry is the element itself
                 node = node == .null ? json(a, children: []) : json(a, children: [node])
             }

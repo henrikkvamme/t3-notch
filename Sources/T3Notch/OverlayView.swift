@@ -405,6 +405,11 @@ struct OverlayView: View {
         let text = ui.draft
         let clips = ui.clips
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
+        // Keep the draft when the selections cannot go in one message.
+        guard Store.clipPlan(clips) != nil else {
+            store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
+            return
+        }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         Task { await store.send(text, clips: clips) }
         ui.onClose?() // sent: tuck the island away and hand focus back
