@@ -24,6 +24,8 @@ final class OverlayUIState {
     var peekCompact = false
     /// The selection whose comment is open under the row.
     var editingClip: UUID?
+    /// The selection whose chip the pointer is on: its picture shows above the field.
+    var hoveredClip: UUID?
     var draft = ""
     /// Messages on their way to T3. They left the draft, but the focused chat must stay until
     /// each one has its chat (see `Store.holdsTarget`).
@@ -135,7 +137,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, ui.editingClip,
+         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, ui.editingClip, ui.hoveredClip,
          ui.onboarding, ui.onboardingKeysLit, ui.onboardingTried]
     }
 
@@ -177,7 +179,7 @@ struct OverlayView: View {
                             if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
                                 permissionRow.padding(.top, 10).transition(.blurReplace)
                             }
-                            if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip }) {
+                            if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip || $0.id == ui.hoveredClip }) {
                                 clipRow.padding(.top, 10).transition(.blurReplace)
                             }
                             if ui.mode == .expanded {
@@ -512,16 +514,20 @@ struct OverlayView: View {
         .animation(Motion.content, value: ui.missingPermissions)
     }
 
-    /// The selection whose chip you clicked: a larger picture and its comment. ⏎ and Esc go
-    /// back to the message.
-    @ViewBuilder private var clipRow: some View {
-        if let i = ui.clips.firstIndex(where: { $0.id == ui.editingClip }) {
-            VStack(alignment: .leading, spacing: 8) {
-                Image(nsImage: ui.clips[i].thumbnail)
+    /// The picture of the selection whose chip the pointer is on, or of the one you clicked.
+    /// The clicked one also shows its comment. ⏎ and Esc go back to the message.
+    private var clipRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let clip = ui.clips.first(where: { $0.id == ui.hoveredClip }) ?? ui.clips.first(where: { $0.id == ui.editingClip }) {
+                Image(nsImage: clip.thumbnail)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .id(clip.id)
+                    .transition(.blurReplace)
+            }
+            if let i = ui.clips.firstIndex(where: { $0.id == ui.editingClip }) {
                 TextField("Comment on this selection", text: Binding(
                     get: { ui.clips.indices.contains(i) ? ui.clips[i].comment : "" },
                     set: { if ui.clips.indices.contains(i) { ui.clips[i].comment = $0 } }), axis: .vertical)
@@ -534,9 +540,12 @@ struct OverlayView: View {
                         withAnimation(Motion.content) { ui.editingClip = nil }
                         ui.onRequestFocus?()
                     }
+                    .id(ui.editingClip)
+                    .transition(.blurReplace)
             }
-            .id(ui.editingClip)
         }
+        .animation(Motion.content, value: ui.editingClip)
+        .animation(Motion.snappy, value: ui.hoveredClip)
     }
 
     /// A reply in full text; the agent's thinking or current step dimmed; and before its

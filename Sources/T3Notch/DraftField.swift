@@ -54,6 +54,17 @@ struct DraftField: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.documentView = text
         context.coordinator.text = text
+        let ui = ui
+        // A click on a chip opens its picture and comment, and a second click closes them.
+        text.onChipClick = { id in
+            withAnimation(Motion.content) { ui.editingClip = ui.editingClip == id ? nil : id }
+            ui.onRequestFocus?()
+        }
+        // The pointer on a chip shows its picture above the field.
+        text.onChipHover = { id in
+            guard ui.hoveredClip != id else { return }
+            withAnimation(Motion.snappy) { ui.hoveredClip = id }
+        }
         return scroll
     }
 
@@ -278,19 +289,54 @@ struct DraftField: NSViewRepresentable {
             return true
         }
 
-        /// A click on a chip opens its comment, and a second click closes it.
-        func textView(_ textView: NSTextView, clickedOn cell: any NSTextAttachmentCellProtocol, in cellFrame: NSRect, at charIndex: Int) {
-            guard let chip = cell.attachment as? ChipAttachment else { return }
-            let ui = parent.ui
-            withAnimation(Motion.content) { ui.editingClip = ui.editingClip == chip.clipID ? nil : chip.clipID }
-            ui.onRequestFocus?()
-        }
     }
 }
 
 /// The field itself. It takes the first click, also when the island is not the key window.
 final class DraftTextView: NSTextView {
+    var onChipClick: ((UUID) -> Void)?
+    var onChipHover: ((UUID?) -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// The chip under a point of this view.
+    private func chip(at point: NSPoint) -> UUID? {
+        guard let layout = layoutManager, let container = textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let p = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        let glyph = layout.glyphIndex(for: p, in: container)
+        guard layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).contains(p) else { return nil }
+        let index = layout.characterIndexForGlyph(at: glyph)
+        guard index < storage.length else { return nil }
+        return (storage.attribute(.attachment, at: index, effectiveRange: nil) as? ChipAttachment)?.clipID
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let id = chip(at: convert(event.locationInWindow, from: nil)) {
+            onChipClick?(id)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.owner === self && area.userInfo?["chip"] != nil { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: ["chip": true]))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let id = chip(at: convert(event.locationInWindow, from: nil))
+        onChipHover?(id)
+        // A chip is a thing to click, not text.
+        if id != nil { NSCursor.pointingHand.set() }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onChipHover?(nil)
+    }
 }
 
 /// A selection in the message text: its picture and its comment, or what the selection is.
