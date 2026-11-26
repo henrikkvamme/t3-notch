@@ -146,6 +146,9 @@ final class SettingsModel {
     var controlOptionSelect = Settings.controlOptionSelect {
         didSet { Settings.controlOptionSelect = controlOptionSelect }
     }
+    var enterSteers = Settings.enterSteers {
+        didSet { Settings.enterSteers = enterSteers }
+    }
     var launchAtLogin = SMAppService.mainApp.status == .enabled
     var checking = false
     var upToDate = false
@@ -162,6 +165,7 @@ final class SettingsModel {
         showToolSteps = Settings.showToolSteps
         expandOnHover = Settings.expandOnHover
         controlOptionSelect = Settings.controlOptionSelect
+        enterSteers = Settings.enterSteers
         launchAtLogin = SMAppService.mainApp.status == .enabled
         upToDate = false
     }
@@ -271,6 +275,9 @@ private struct SettingsView: View {
     private var switches: some View {
         VStack(spacing: 0) {
             row("Expand on notch hover", isOn: $model.expandOnHover)
+            divider
+            row("⏎ steers the running turn", caption: model.enterSteers ? "⌘⏎ queues after it" : "⏎ queues after it; ⌘⏎ steers",
+                isOn: $model.enterSteers)
             divider
             row("Show when chat finishes", caption: "Only applies when T3 is not in view",
                 isOn: $model.showWhenChatFinishes)
