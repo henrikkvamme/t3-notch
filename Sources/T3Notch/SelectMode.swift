@@ -24,6 +24,10 @@ final class EventTap {
     /// macOS turned the tap off for a moment, so events were missed: a button that went down
     /// may have gone up unseen.
     var onMissedEvents: (() -> Void)?
+    /// The taps that run now, by address. The callback holds no reference to its tap, and an
+    /// event that was already on its way can arrive after `stop` and after the tap is gone:
+    /// the callback asks here before it touches the tap.
+    fileprivate static var live = Set<UnsafeMutableRawPointer>()
 
     init?(_ types: [CGEventType], handler: @escaping (CGEventType, CGEvent) -> Bool) {
         self.handler = handler
@@ -32,6 +36,7 @@ final class EventTap {
                                            eventsOfInterest: mask, callback: eventTapCallback,
                                            userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return nil }
         self.port = port
+        Self.live.insert(Unmanaged.passUnretained(self).toOpaque())
         source = CFMachPortCreateRunLoopSource(nil, port, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
@@ -40,6 +45,7 @@ final class EventTap {
     /// Stops the tap for good. The callback holds no reference, so stop before letting go.
     func stop() {
         guard let port else { return }
+        Self.live.remove(Unmanaged.passUnretained(self).toOpaque())
         CGEvent.tapEnable(tap: port, enable: false)
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         CFMachPortInvalidate(port)
@@ -61,7 +67,8 @@ private func eventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
     nonisolated(unsafe) let event = event
     nonisolated(unsafe) let refcon = refcon
     let keep = MainActor.assumeIsolated {
-        guard let refcon else { return false }
+        // A late event of a tap that stopped: let it through, and do not touch the tap.
+        guard let refcon, EventTap.live.contains(refcon) else { return false }
         let tap = Unmanaged<EventTap>.fromOpaque(refcon).takeUnretainedValue()
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             tap.enable()
