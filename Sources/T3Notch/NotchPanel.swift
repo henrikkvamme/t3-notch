@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import SwiftUI
+import os
 
 /// Borderless, non-activating panel over the notch. It is a fixed transparent canvas: the
 /// island inside is drawn and animated by SwiftUI, so it can grow out of the notch.
@@ -69,6 +70,8 @@ enum Motion {
     static let message = Animation.smooth(duration: 0.45)
     /// List selection: fast and nearly critically damped, so it feels instant.
     static let select = Animation.spring(response: 0.16, dampingFraction: 0.9)
+    /// Select mode's highlight, in when ⌃⌥ goes down and out when it goes up.
+    static let hold = Animation.smooth(duration: 0.16)
 }
 
 /// Shows, hides and animates the island. The panel is a fixed canvas top-centred on the
@@ -212,6 +215,7 @@ final class PanelController {
     /// anyway (opening the thread in T3), so the two activations don't fight.
     func hide(returnFocus shouldReturn: Bool = true) {
         peekHideTask?.cancel()
+        onboardingSelectHidden(selecting: clipper != nil)
         if shouldReturn { returnFocus() } else { panel.resignKey() }
         withAnimation(Motion.close) {
             ui.mode = .hidden
@@ -327,7 +331,7 @@ final class PanelController {
     /// Focuses the visible text field; returns false when there is none.
     @discardableResult
     private func focusTextFieldNow() -> Bool {
-        guard let root = panel.contentView, let field = Self.findTextField(in: root) else { return false }
+        guard let field = panel.contentView?.firstEditableText else { return false }
         let ok = panel.makeFirstResponder(field)
         updateCursor()
         return ok
@@ -336,15 +340,6 @@ final class PanelController {
     /// True while a text field is being edited (its field editor is first responder).
     private var isEditingText: Bool {
         (panel.firstResponder as? NSTextView)?.isEditable == true
-    }
-
-    private static func findTextField(in view: NSView) -> NSView? {
-        for sub in view.subviews {
-            if let tf = sub as? NSTextField, tf.isEditable, !tf.isHidden { return tf }
-            if let tv = sub as? NSTextView, tv.isEditable, !tv.isHidden { return tv }
-            if let found = findTextField(in: sub) { return found }
-        }
-        return nil
     }
 
     /// Overlay shortcuts. Returns true when the key was handled.
@@ -471,45 +466,90 @@ final class PanelController {
         }
     }
 
-    /// A tap of ⌃⌥ from any app: select what is under the pointer without opening the island
-    /// first. Picks go to the focused chat and open the island; Esc with no picks leaves
-    /// everything as it was.
-    func startSelecting(inTour: Bool = false) {
-        // The tour's Select step takes the tap, and starts select mode itself (`inTour`).
-        if ui.onboarding == .select, !inTour { onboardingSelectTapped(); return }
-        guard clipper == nil, inTour || ui.mode != .expanded else { return }
-        guard Permission.screenRecording.isGranted, Permission.accessibility.isGranted else {
+    /// Set by the app delegate: select mode ended by itself, and ⌃⌥ may still be down.
+    var onSelectEnded: (() -> Void)?
+    /// `--select-dry`, for checking select mode: ⏎ sends nothing.
+    var selectSendsNothing = false
+    private let selectLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.t3notch.app", category: "select")
+
+    /// ⌃⌥ is held in any app, or no longer. While held, select mode shows what is under the
+    /// pointer and the island stays as it is. A click opens a comment field, and ⏎ there sends
+    /// the selection and the comment to the last opened session.
+    func selectHold(_ held: Bool) {
+        guard held else {
+            clipper?.holdEnded()
+            return
+        }
+        guard clipper == nil else { return }
+        // The tour's Select step, with the island in view: the hold is the lesson.
+        let inTour = ui.onboarding == .select && ui.mode == .expanded
+        if inTour, !Onboarding.canSelect {
+            onboardingSelectHeld(started: false)
+            return
+        }
+        guard Permission.accessibility.isGranted else {
             expand()
             showMissingPermissions()
             return
         }
-        let wasPeeking = ui.mode != .hidden
-        // Before the clipper makes T3 Notch active: the island hands focus back to this app.
-        rememberFrontApp()
-        orderOutTask?.cancel()
-        ui.mode = .hidden
-        ui.pickerOpen = false
-        panel.ignoresMouseEvents = true
-        panel.orderOut(nil)
-        let destination = ClipController.Destination(
+        store.focusLastOpened()
+        let islandHadKeys = panel.isKeyWindow
+        var select = ClipController.Select(
             title: { [weak self] in self?.store.targetTitle },
-            cycle: { [weak self] step in self?.store.cycleTarget(step) })
-        clipper = ClipController.start(depth: ui.clipDepth, destination: destination) { [weak self] clips, depth in
-            guard let self else { return }
-            self.clipper = nil
-            self.ui.clipDepth = depth
-            if inTour {
-                self.ui.clips += clips
-                self.onboardingSelectEnded()
+            cycle: { [weak self] step in self?.store.cycleTarget(step) },
+            onEnd: { [weak self] end in self?.selectEnded(end, islandHadKeys: islandHadKeys, inTour: inTour) })
+        if inTour { select.onScroll = { [weak self] in self?.onboardingSelectScrolled() } }
+        clipper = ClipController.startSelecting(select)
+        if inTour { onboardingSelectHeld(started: clipper != nil) }
+    }
+
+    private func selectEnded(_ end: ClipController.SelectEnd, islandHadKeys: Bool, inTour: Bool) {
+        clipper = nil
+        // The tour moves on after a click, and asks again after a hold without one.
+        defer { if inTour { onboardingSelectEnded(clicked: !end.isRelease) } }
+        switch end {
+        case .released:
+            return // the hold trigger knows: it reported the end, or gets the same key event
+        case .cancelled:
+            break
+        case let .send(clip, comment, steer):
+            let size = clip.thumbnail.size
+            selectLog.notice("""
+                send \(Int(size.width), privacy: .public)x\(Int(size.height), privacy: .public) \
+                app=\(clip.context?.appName ?? "none", privacy: .public) \
+                element=\(clip.context?.element?.role ?? "none", privacy: .public) \
+                page=\(clip.context?.page != nil, privacy: .public) comment=\(comment.count, privacy: .public)
+                """)
+            // No chat to send to: the island takes them and opens on the list of chats. The
+            // tour sends nothing either: a first try must not start an agent.
+            guard !selectSendsNothing, !inTour, store.targetThreadId != nil, Store.clipPlan([clip]) != nil else {
+                keep(clip, comment)
                 return
             }
-            if clips.isEmpty {
-                if wasPeeking { self.peek(autoHide: true) }
-                return
+            Task { [weak self] in
+                guard let self else { return }
+                await self.store.send(comment, steer: steer, clips: [clip])
+                // Not sent: the island shows why, with the selection and the comment back in it.
+                if self.store.lastSendError != nil { self.keep(clip, comment) }
             }
-            self.ui.clips += clips
-            self.expand()
+        case let .unsent(comment):
+            keep(nil, comment)
+            showMissingPermissions()
+            return
         }
+        // The comment field had the keyboard; the island gets it back if it had it before.
+        if islandHadKeys, ui.mode == .expanded {
+            panel.makeKey()
+            focusTextField()
+        }
+        onSelectEnded?()
+    }
+
+    /// Puts a selection and its comment in the island and opens it, so nothing is lost.
+    private func keep(_ clip: Clip?, _ comment: String) {
+        if let clip { ui.clips.append(clip) }
+        if !comment.isEmpty { ui.draft = ui.draft.isEmpty ? comment : ui.draft + "\n" + comment }
+        expand()
     }
 
     // MARK: - Permissions
@@ -568,6 +608,18 @@ final class PanelController {
             if !open { ui.pickerQuery = "" }
         }
         focusTextField()
+    }
+}
+
+extension NSView {
+    /// The first visible text field inside this view that can be typed in.
+    var firstEditableText: NSView? {
+        for sub in subviews {
+            if let tf = sub as? NSTextField, tf.isEditable, !tf.isHidden { return tf }
+            if let tv = sub as? NSTextView, tv.isEditable, !tv.isHidden { return tv }
+            if let found = sub.firstEditableText { return found }
+        }
+        return nil
     }
 }
 

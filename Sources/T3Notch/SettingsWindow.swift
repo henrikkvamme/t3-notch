@@ -15,6 +15,7 @@ final class SettingsController {
 
     init(store: Store, updater: Updater, ui: OverlayUIState, actions: SettingsModel.Actions) {
         model = SettingsModel(store: store, updater: updater, ui: ui, actions: actions)
+        BrowserBridge.shared.onChange = { [model] in model.browserConnected = BrowserBridge.shared.isConnected }
         panel.level = .statusBar + 2 // over the island and the dot
         panel.contentView = FirstClickHostingView(rootView: SettingsView(model: model))
         resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel,
@@ -148,6 +149,8 @@ final class SettingsModel {
         didSet { Settings.controlOptionSelect = controlOptionSelect }
     }
     var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// A browser with the T3 Notch extension is connected.
+    var browserConnected = BrowserBridge.shared.isConnected
     var checking = false
     var upToDate = false
 
@@ -163,8 +166,23 @@ final class SettingsModel {
         showToolSteps = Settings.showToolSteps
         expandOnHover = Settings.expandOnHover
         controlOptionSelect = Settings.controlOptionSelect
+        browserConnected = BrowserBridge.shared.isConnected
         launchAtLogin = SMAppService.mainApp.status == .enabled
         upToDate = false
+    }
+
+    /// Copies the bundled extension to Application Support (a folder the browser can keep
+    /// loading after app updates) and shows it in Finder, for "Load unpacked".
+    func revealExtension() {
+        guard let bundled = Bundle.main.url(forResource: "Extension", withExtension: nil) else { return }
+        let fm = FileManager.default
+        let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "dev.t3notch.app")
+        let target = dir.appendingPathComponent("Browser Extension")
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? fm.removeItem(at: target)
+        try? fm.copyItem(at: bundled, to: target)
+        NSWorkspace.shared.activateFileViewerSelecting([target])
     }
 
     func setLaunchAtLogin(_ on: Bool) {
@@ -243,8 +261,10 @@ private struct SettingsView: View {
             divider
             row("Show commands while working", isOn: $model.showToolSteps)
             divider
-            row("Select with ⌃⌥", caption: "Tap Control and Option in any app to select what is under the pointer",
+            row("Select with ⌃⌥", caption: "Hold Control and Option in any app, then click to comment on what is under the pointer",
                 isOn: $model.controlOptionSelect)
+            divider
+            extensionRow
             divider
             row("Hide status dot", isOn: Binding(get: { model.ui.dotHiddenByUser }, set: { model.ui.dotHiddenByUser = $0 }))
             divider
@@ -372,6 +392,26 @@ private struct SettingsView: View {
             .buttonStyle(.plain)
             .glassEffect(recording ? .regular.tint(.accentColor.opacity(0.35)).interactive() : .regular.interactive(), in: .capsule)
             .animation(Motion.snappy, value: label)
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// The browser extension: connected, or a button that shows the folder to load.
+    private var extensionRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Browser extension").font(.system(size: 13))
+                Text(model.browserConnected ? "Connected: picks page elements in the browser"
+                     : "Load it unpacked in Chrome, Ardia, Arc or Brave to pick page elements")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            if model.browserConnected {
+                Circle().fill(.green).frame(width: 7, height: 7)
+            } else {
+                pill("Show folder") { model.revealExtension() }
+            }
         }
         .padding(.vertical, 6)
     }

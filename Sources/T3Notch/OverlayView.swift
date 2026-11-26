@@ -68,6 +68,8 @@ final class OverlayUIState {
     var onboardingKeysLit = false
     /// Keys held down right now, by keycap symbol, so the tour's keycaps go down with them.
     var onboardingHeld: Set<String> = []
+    /// The tour's Select step: a scroll changed the level, so the step stops asking for one.
+    var onboardingScrolled = false
     /// The keys card's shortcuts tried so far.
     var onboardingTried: Set<OnboardingTip> = []
     /// Counts the tour's successes; each change plays the success moment.

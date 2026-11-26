@@ -19,8 +19,14 @@ self-update. `make install` quits and replaces only the dev copy.
 - `Sources/T3Notch/Onboarding.swift`: the welcome tour, in the island. Real key presses drive it. A step's
   success is one moment: the keys bottom out and spring back, light spreads from the last key, the island
   stretches, and a note and a trackpad tap land with it. Check a step with `--onboarding [step]`.
-  Its Select step takes the tap of `SelectTrigger` and then starts the real select mode; it draws the keys
-  from `SelectTrigger.keycaps` and is left out while the tap is off.
+  Its Select step runs the real select mode while ⌃⌥ is held: the hold lights the keys, a scroll and a click
+  move its words on, and the step ends when the comment field closes. There ⏎ sends nothing; the selection
+  and the comment go to the island. It draws the keys from `SelectTrigger.keycaps` and is left out while
+  the hold is off.
+- `Sources/T3Notch/ClipMode.swift`: clip mode (⌘P) and select mode (hold ⌃⌥), the element probe, and the
+  overlay that draws both.
+- `Sources/T3Notch/SelectTrigger.swift`: reports while ⌃⌥ is held in any app.
+- `Sources/T3Notch/SelectMode.swift`: select mode's event tap, screen capture and comment field.
 - `Sources/T3Notch/BuildInfo.swift`: the T3 version and commit the client was last fixed against.
 
 ## The T3 protocol in use
@@ -73,6 +79,17 @@ active by `activeOrderKey`, then settled or snoozed ones by latest activity. Row
 2. Fix the client against what changed.
 3. Update `BuildInfo.swift`.
 4. Run `make install` and confirm that the menu bar shows "Connected".
+
+## Select mode
+
+Select mode has two phases. In `hover` the screen is live, the overlays let clicks through, and an event tap
+takes the scroll and the left button. The tap also ends the hold when a key goes up, because it sees the keys
+in order with the clicks. In `annotate` (after the click) the screens are frozen, and the overlay takes the
+pointer and the keyboard without making T3 Notch the active app.
+
+To test it, run `T3Notch --select --select-dry`. `--select` shows select mode 1.5 s after launch, as if the keys
+were held. `--select-dry` makes ⏎ put the selection and the comment in the island and send nothing. A test copy
+started with `open` has its own permissions; one started from a shell uses the shell's.
 
 ## Recording the demo
 
