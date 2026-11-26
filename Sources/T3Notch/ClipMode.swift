@@ -1379,14 +1379,16 @@ private struct ClipOverlayView: View {
         let highlight = state.highlight.map(local)
         let selecting = state.phase != .clip
         ZStack(alignment: .topLeading) {
-            if let image = state.image(for: screenRect) {
+            // Select mode stays on the live screen: the frozen picture has no island in it, so
+            // showing it made an open island vanish for a moment.
+            if !selecting || state.commenting, let image = state.image(for: screenRect) {
                 Image(decorative: image, scale: CGFloat(image.width) / screenRect.width)
                     .resizable()
                     .frame(width: screenRect.width, height: screenRect.height)
             }
             // Dim with a hole where the highlight is. Not while ⌃⌥ is only held: the screen
             // is live then, and nothing but the highlight shows.
-            Rectangle().fill(.black.opacity(state.active && state.phase != .hover ? 0.38 : 0))
+            Rectangle().fill(.black.opacity(state.active && (!selecting || state.commenting) && state.phase != .hover ? 0.38 : 0))
                 .overlay(alignment: .topLeading) {
                     if let h = highlight {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)

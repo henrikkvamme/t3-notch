@@ -408,13 +408,13 @@ enum PickReader {
 
 extension PickContext {
     /// The selection with what is around it, cut from `windowPNG`: the outline is on it. The
-    /// margin is at least 80 pt and grows with the selection. At most 1568 px long, the most a
+    /// margin is 80 to 200 pt and grows with the selection's shorter side. At most 1568 px long, the most a
     /// model looks at. Nil without a window picture.
     func surroundPNG() -> Data? {
         guard let windowPNG, windowScale > 0, let rep = NSBitmapImageRep(data: windowPNG), let image = rep.cgImage else { return nil }
         let c = clipFrame.intersection(windowFrame)
         guard !c.isNull else { return nil }
-        let margin = max(80, 0.6 * max(c.width, c.height))
+        let margin = max(80, min(200, 0.6 * min(c.width, c.height)))
         let r = c.insetBy(dx: -margin, dy: -margin).intersection(windowFrame)
         let px = CGRect(x: (r.minX - windowFrame.minX) * windowScale, y: (r.minY - windowFrame.minY) * windowScale,
                         width: r.width * windowScale, height: r.height * windowScale).integral

@@ -15,6 +15,10 @@ final class OverlayUIState {
     /// Each picker row's frame, so the selection highlight can slide between them.
     var pickerRowFrames: [Int: CGRect] = [:]
     var hovering = false
+    /// A selection is on its way to the island: its place in the row is kept free.
+    var landing = false
+    /// That place in the island's window, top-left origin.
+    var landingSlot: CGRect?
     var draft = ""
     /// Messages on their way to T3. They left the draft, but the focused chat must stay until
     /// each one has its chat (see `Store.holdsTarget`).
@@ -174,7 +178,7 @@ struct OverlayView: View {
                             if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
                                 permissionRow.padding(.top, 10).transition(.blurReplace)
                             }
-                            if ui.mode == .expanded && !ui.clips.isEmpty {
+                            if ui.mode == .expanded && (!ui.clips.isEmpty || ui.landing) {
                                 clipRow.padding(.top, 10).transition(.blurReplace)
                             }
                             if ui.mode == .expanded {
@@ -543,6 +547,14 @@ struct OverlayView: View {
                         }
                         .transition(.blurReplace.combined(with: .scale(0.8)))
                 }
+                // Where the selection that is flying in will sit.
+                if ui.landing {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(.white.opacity(0.06))
+                        .frame(width: 64, height: 44)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ui.landingSlot = $0 }
+                        .transition(.opacity)
+                }
             }
             // A larger preview of the hovered clip, under the row.
             if let clip = ui.clips.first(where: { $0.id == hoveredClip }) {
@@ -556,6 +568,7 @@ struct OverlayView: View {
             }
         }
         .animation(Motion.content, value: ui.clips)
+        .animation(Motion.content, value: ui.landing)
         .animation(Motion.content, value: hoveredClip)
     }
 

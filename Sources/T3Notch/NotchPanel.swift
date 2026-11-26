@@ -561,7 +561,7 @@ final class PanelController {
         case .released:
             return // the hold trigger knows: it reported the end, or gets the same key event
         case .cancelled:
-            break
+            ui.landing = false
         case let .send(clip, comment, steer, to):
             let size = clip.thumbnail.size
             selectLog.notice("""
@@ -573,12 +573,13 @@ final class PanelController {
             // The selection is context for the chat: it sits in the island as a chip, and the
             // island's input has the keyboard. `land` opened the island when the click came.
             _ = (steer, to)
-            withAnimation(Motion.snappy) { ui.clips.append(clip) }
+            withAnimation(Motion.snappy) { ui.landing = false; ui.clips.append(clip) }
             if !comment.isEmpty { ui.draft = ui.draft.isEmpty ? comment : ui.draft + "\n" + comment }
             if ui.mode != .expanded { expand() } else { panel.makeKey(); focusTextField() }
             onSelectEnded?()
             return
         case let .unsent(comment):
+            ui.landing = false
             keep(nil, comment)
             showMissingPermissions()
             return
@@ -594,16 +595,12 @@ final class PanelController {
     /// A click in select mode picked something. Its picture flies from where it is on screen
     /// into the notch, and the island opens on the chat it is for, so you see where it went.
     private func land(_ image: NSImage, from rect: CGRect) {
+        ui.landingSlot = nil
+        ui.landing = true
         if ui.mode != .expanded { expand() }
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
               let primary = NSScreen.screens.first?.frame.height else { return }
         let start = NSRect(x: rect.minX, y: primary - rect.maxY, width: rect.width, height: rect.height)
-        // It ends as a chip-sized picture just under the notch, where the island opens.
-        let notch = geometry.notchRect
-        let scale = min(64 / max(rect.width, 1), 44 / max(rect.height, 1), 1)
-        let size = CGSize(width: max(rect.width * scale, 12), height: max(rect.height * scale, 12))
-        let end = NSRect(x: notch.midX - size.width / 2, y: notch.minY - 14 - size.height,
-                         width: size.width, height: size.height)
         let window = NSPanel(contentRect: start, styleMask: [.borderless, .nonactivatingPanel],
                              backing: .buffered, defer: false)
         window.isOpaque = false
@@ -623,13 +620,31 @@ final class PanelController {
         view.layer?.borderColor = NSColor.white.withAlphaComponent(0.25).cgColor
         window.contentView = view
         window.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.44
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0, 0.12, 1)
-            window.animator().setFrame(end, display: true)
-        }
-        // It fades as it arrives, while the chip comes in under it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+        Task { [weak self] in
+            // The island lays out the free place in its row of selections: wait for it, a
+            // few frames at most. It reports where the place ends up, also while it opens.
+            for _ in 0..<12 where self?.ui.landingSlot == nil { try? await Task.sleep(for: .milliseconds(16)) }
+            guard let self else { window.orderOut(nil); return }
+            // It ends in that place, or just under the notch when the island has none.
+            var slot: NSRect
+            if let s = self.ui.landingSlot {
+                let frame = self.panel.frame
+                slot = NSRect(x: frame.minX + s.minX, y: frame.maxY - s.maxY, width: s.width, height: s.height)
+            } else {
+                let notch = self.geometry.notchRect
+                slot = NSRect(x: notch.midX - 32, y: notch.minY - 58, width: 64, height: 44)
+            }
+            let scale = min(slot.width / max(rect.width, 1), slot.height / max(rect.height, 1), 1)
+            let size = CGSize(width: max(rect.width * scale, 12), height: max(rect.height * scale, 12))
+            let end = NSRect(x: slot.midX - size.width / 2, y: slot.midY - size.height / 2,
+                             width: size.width, height: size.height)
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.44
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0, 0.12, 1)
+                window.animator().setFrame(end, display: true)
+            }, completionHandler: nil)
+            // It fades as it arrives, while the chip comes in under it.
+            try? await Task.sleep(for: .milliseconds(340))
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.16
                 window.animator().alphaValue = 0
