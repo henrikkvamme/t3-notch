@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey = Hotkey(Settings.showIslandKey, id: 1) { [weak self] in self?.panel.toggle() }
         // Hides or shows the status dot, e.g. while watching a film.
         dotHotkey = Hotkey(Settings.toggleDotKey, id: 2) { [weak self] in self?.toggleDot() }
-        selectTrigger = SelectTrigger { [weak self] in self?.panel.startSelecting() }
+        selectTrigger = SelectTrigger { [weak self] held in self?.panel.selectHold(held) }
+        panel.onSelectEnded = { [weak self] in self?.selectTrigger.resume() }
         BrowserBridge.shared.start()
         store.onAttentionNeeded = { [weak self] reason in
             guard let self, self.panel.mode == .hidden else { return }
@@ -47,6 +48,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `--open-settings` shows the card at launch, for checking its design.
         if CommandLine.arguments.contains("--open-settings") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.settings.open() }
+        }
+        // `--select` shows select mode at launch as if ⌃⌥ were held, for checking it. It
+        // stays until a click and then Esc or ⏎. `--select-dry` sends nothing for as long as
+        // the app runs: a selection and its comment go to the island.
+        panel.selectSendsNothing = CommandLine.arguments.contains("--select-dry")
+        if CommandLine.arguments.contains("--select") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.panel.selectHold(true) }
         }
         if Store.demo {
             demo = DemoController(panel: panel, store: store)

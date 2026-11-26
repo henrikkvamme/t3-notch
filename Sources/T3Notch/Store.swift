@@ -842,7 +842,7 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
     }
 
-    /// A tap of ⌃⌥ from any app starts select mode. On by default.
+    /// Holding ⌃⌥ in any app shows select mode. On by default.
     static var controlOptionSelect: Bool {
         get { UserDefaults.standard.object(forKey: "controlOptionSelect") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "controlOptionSelect") }
