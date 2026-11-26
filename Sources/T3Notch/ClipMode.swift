@@ -282,7 +282,7 @@ final class ClipController {
         guard state.region == nil else { return } // a dragged rectangle has no levels
         if leavePreset() { return }
         _ = beginNavigation()
-        state.step(step, key: true)
+        state.step(step)
     }
 
     /// Moves the highlight to the previous (−1) or next (+1) sibling of the highlighted
@@ -814,7 +814,7 @@ final class ClipState {
     @ObservationIgnored private let haptics = ClipHaptics()
     func hoverTap() { haptics.hover() }
     /// No sibling that way: the highlight is on the first or the last one.
-    func limitTap(_ direction: Int) { haptics.limit(direction > 0 ? .last : .first, again: true) }
+    func limitTap(_ direction: Int) { haptics.limit(direction > 0 ? .last : .first) }
 
     /// The saved clip under the pointer (newest wins), which a click removes.
     var hoveredSaved: Int? {
@@ -964,13 +964,12 @@ final class ClipState {
     /// is the window (its own level, below the smallest element), then 0 … top from the
     /// smallest element outwards. Scrolling stops at both ends, and at a level that would
     /// show the same frame (−1 and top are both the window).
-    func step(_ step: Int, key: Bool = false) {
+    func step(_ step: Int) {
         guard step != 0, !chain.isEmpty else { return }
         let current = level
         let target = min(max(current + step, 0), chain.count - 1)
         guard let now = rect(at: current), let next = rect(at: target), !next.isSame(as: now) else {
-            // A key press at the end is felt each time. A scroll sends many events: once.
-            haptics.limit(step > 0 ? .top : .bottom, again: key)
+            haptics.limit(step > 0 ? .top : .bottom)
             return
         }
         depth = target
@@ -1009,9 +1008,8 @@ extension CGRect {
 // MARK: - Haptics
 
 /// Trackpad feedback: a light tap when select mode's pointer comes onto another element, a
-/// light tap per level, and two strong ones when a step reaches the top or bottom level or
-/// the last sibling. A scroll gives them once per reach, and again only after a step away; a
-/// key press gives them each time. Each one is logged (category "haptics"), so `log stream` shows
+/// light tap per level, and a fast burst of strong ones each time a step cannot go on: at
+/// the top or bottom level, or at the last sibling. Each one is logged (category "haptics"), so `log stream` shows
 /// them on a Mac with no trackpad.
 @MainActor
 final class ClipHaptics {
@@ -1019,7 +1017,6 @@ final class ClipHaptics {
 
     private let perform: (NSHapticFeedbackManager.FeedbackPattern) -> Void
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.t3notch.app", category: "haptics")
-    private var atLimit: Edge?
 
     init(perform: @escaping (NSHapticFeedbackManager.FeedbackPattern) -> Void = {
         NSHapticFeedbackManager.defaultPerformer.perform($0, performanceTime: .now)
@@ -1028,7 +1025,6 @@ final class ClipHaptics {
     }
 
     func step(depth: Int) {
-        atLimit = nil
         perform(.alignment)
         log.notice("haptic step depth=\(depth, privacy: .public)")
     }
@@ -1043,14 +1039,18 @@ final class ClipHaptics {
     }
     private var lastHover = Date.distantPast
 
-    func limit(_ edge: Edge, again: Bool = false) {
-        guard again || atLimit != edge else { return }
-        atLimit = edge
-        perform(.levelChange)
-        // The second one makes the end unlike a step, which is one light tap.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) { [perform] in perform(.levelChange) }
+    /// A step that cannot go on: a fast burst of three strong taps, unlike the one light tap
+    /// of a step. It comes again for each try, a scroll that goes on gives a few per second.
+    func limit(_ edge: Edge) {
+        let now = Date()
+        guard now.timeIntervalSince(lastLimit) > 0.22 else { return }
+        lastLimit = now
+        for i in 0..<3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.045) { [perform] in perform(.levelChange) }
+        }
         log.notice("haptic limit \(edge.rawValue, privacy: .public)")
     }
+    private var lastLimit = Date.distantPast
 }
 
 // MARK: - Element probe
