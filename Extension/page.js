@@ -132,7 +132,7 @@
       const [a, b] = [+v4[1], +v4[2]];
       return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
     }
-    return h === "::1" || /^f[cd]/.test(h) || h.startsWith("fe80:");
+    return h.includes(":") && (h === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(h) || h.startsWith("fe80:"));
   };
   const cleanURL = (v) => {
     let u;
@@ -142,8 +142,13 @@
     if (!isLocalHost(u.hostname)) { u.search = ""; u.hash = ""; }
     return u.href;
   };
-  const cleanAttr = (name, v) =>
-    URL_ATTRS.has(name.toLowerCase()) || /^(https?|wss?):\/\//i.test(v.trim()) ? cleanURL(v.trim()) : v;
+  // srcset and imagesrcset hold URL lists with sizes: dropped, like style.
+  const DROP_ATTRS = new Set(["value", "style", "nonce", "srcset", "imagesrcset"]);
+  const cleanAttr = (name, v) => {
+    const n = name.toLowerCase();
+    if (n === "ping") return v.trim().split(/\s+/).filter(Boolean).map(cleanURL).join(" ");
+    return URL_ATTRS.has(n) || /^(https?|wss?):\/\//i.test(v.trim()) ? cleanURL(v.trim()) : v;
+  };
 
   // The element's HTML without scripts, styles, inline handlers, typed values or data URLs.
   const cleanHTML = (el, max) => {
@@ -154,7 +159,7 @@
       if (e.tagName === "svg" || e.tagName === "SVG") { e.replaceChildren(); }
       for (const a of [...e.attributes]) {
         const v = a.value;
-        if (a.name.startsWith("on") || a.name === "value" || a.name === "style" || a.name === "nonce" || a.name === "srcset" ||
+        if (a.name.startsWith("on") || DROP_ATTRS.has(a.name.toLowerCase()) ||
           /^\s*(data|blob|javascript):/i.test(v)) { e.removeAttribute(a.name); continue; }
         const c = cleanAttr(a.name, v);
         if (c.length > 200) e.setAttribute(a.name, c.slice(0, 199) + "…");
@@ -171,7 +176,7 @@
     if (!el) return null;
     const attributes = {};
     for (const a of el.attributes) {
-      if (a.name === "value" || a.name === "style" || a.name.startsWith("on") || /^\s*(data|blob|javascript):/i.test(a.value)) continue;
+      if (DROP_ATTRS.has(a.name.toLowerCase()) || a.name.startsWith("on") || /^\s*(data|blob|javascript):/i.test(a.value)) continue;
       attributes[a.name] = clip(cleanAttr(a.name, a.value), 200);
     }
     let value = null;
