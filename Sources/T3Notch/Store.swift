@@ -1125,7 +1125,7 @@ final class Store {
             // agent many tokens and seldom says more.
             let name = "selection-\(n).png"
             images.append(image(name, p.window ? ctx.surroundPNG() ?? clip.png : clip.png))
-            labels.append(ctx.page.flatMap { $0.name ?? $0.text } ?? ctx.element.flatMap { $0.name ?? $0.description }
+            labels.append(ctx.page.flatMap { $0.name ?? $0.hint ?? $0.text } ?? ctx.element.flatMap { $0.name ?? $0.description }
                           ?? ctx.elementText ?? "Selection \(n)")
             elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name, comment: clip.comment))
         }

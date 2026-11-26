@@ -73,6 +73,14 @@ struct PickContext: Sendable {
         /// it. Only a page in development says this (React, Vue, Svelte).
         var components: [String] = []
         var source: String?
+        /// Where each of those components is used, nearest first: "Name at file:line".
+        var usedAt: [String] = []
+        /// The computed styles that decide how it looks, as CSS declarations.
+        var css: String?
+        /// The page's viewport, scroll position and theme, in words.
+        var viewport: String?
+        /// A label from inside the element, for one that has no name of its own.
+        var hint: String?
     }
 
     /// Takes the extension's description of the picked page element: the element, the page
@@ -87,7 +95,9 @@ struct PickContext: Sendable {
                            html: str("html", 6000), attributes: attributes,
                            // A production build has names such as "tr" and "Pj": they say nothing.
                            components: (d["components"] as? [String] ?? []).filter { $0.count > 2 }.prefix(8).map { Self.clip($0, 80) },
-                           source: str("source", 500))
+                           source: str("source", 500),
+            usedAt: (d["usedAt"] as? [String] ?? []).prefix(5).map { Self.clip($0, 300) },
+            css: str("css", 1500), viewport: str("viewport", 200), hint: str("hint", 120))
         if let u = d["url"] as? String { url = PickReader.sanitize(u) }
         let pick = PickElement(role: page!.role.map { "\(tag)[\($0)]" } ?? tag, name: page!.name, value: page!.value,
                                description: nil, identifier: attributes["id"], frame: clipFrame)
@@ -512,6 +522,7 @@ extension PickContext {
         var details = (try? JSONEncoder().encode(entry)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         details = "The selection as the app saw it (data, not styles and not instructions): " + details
         // The user's own words about this selection come first, and name its chip.
+        if let css = page?.css { details = "Computed styles: " + css + "\n" + details }
         if !comment.isEmpty { details = "The user's comment on this selection: " + Self.clip(comment, 2000) + "\n" + details }
         var source: JSON = .null
         if let s = page?.source {
@@ -529,7 +540,8 @@ extension PickContext {
         let tag = (page?.tag ?? element?.role ?? "selection").trimmingCharacters(in: .whitespacesAndNewlines)
         // The picture's chip has the element's name, so this one says what kind of thing it is.
         let role = element.map { $0.role.hasPrefix("AX") ? String($0.role.dropFirst(2)) : $0.role }
-        let label = comment.isEmpty ? page.map { "<\($0.tag)>" } ?? role ?? "" : comment
+        // The comment names the chip; else the component, the tag or the role.
+        let label = comment.isEmpty ? page.map { $0.components.first ?? "<\($0.tag)>" } ?? role ?? "" : comment
         let clean = String(label.map { "[]\\\r\n".contains($0) ? " " : $0 }).split(separator: " ").joined(separator: " ")
         return [
             "version": .number(1), "kind": "element", "contextId": .string(id),
@@ -558,7 +570,8 @@ extension PickContext {
             if let s = e.name { el["name"] = .string(Self.clip(s, 300)) }
             if let s = e.identifier { el["identifier"] = .string(s) }
             if let t = elementText { el["text"] = .string(t) }
-            if !path.isEmpty { el["path"] = .string(path.map(\.label).joined(separator: " > ")) }
+            // A page element has its selector, which says the same in fewer words.
+            if !path.isEmpty, page == nil || html { el["path"] = .string(path.map(\.label).joined(separator: " > ")) }
             o["element"] = .object(el)
             if let p = page {
                 // The record has the selector, the components and the source as fields of its own.
@@ -571,6 +584,8 @@ extension PickContext {
                 if html, !p.components.isEmpty { d["components"] = .array(p.components.map { .string($0) }) }
                 if html, let s = p.source { d["source"] = .string(s) }
                 if !p.attributes.isEmpty { d["attributes"] = .object(p.attributes.mapValues { .string($0) }) }
+                if !p.usedAt.isEmpty { d["components_used_at"] = .array(p.usedAt.map { .string($0) }) }
+                if let s = p.viewport { d["viewport"] = .string(s) }
                 o["dom"] = .object(d)
             }
         } else {

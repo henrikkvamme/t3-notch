@@ -150,6 +150,31 @@ function sourceOf(mark) {
   el.removeAttribute("data-t3n-pick");
   const components = [];
   let source = null;
+  // Where each component around the element is used, nearest first: "Name at file:line".
+  const usedAt = [];
+  const extra = {};
+  try {
+    // The styles that decide how the element looks, without the values every element has.
+    const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+    const plain = new Set(["none", "normal", "auto", "0px", "static", "visible", "rgba(0, 0, 0, 0)", "start", "stretch", "row", "nowrap", "0s", "0 1 auto", "baseline"]);
+    const css = [`width:${Math.round(r.width)}px`, `height:${Math.round(r.height)}px`];
+    for (const p of ["display", "position", "flex", "flex-direction", "align-items", "justify-content", "gap", "grid-template-columns",
+      "padding", "margin", "border", "border-radius", "background-color", "color", "font-family", "font-size", "font-weight",
+      "line-height", "text-align", "box-shadow", "opacity", "overflow", "z-index", "cursor"]) {
+      const v = cs.getPropertyValue(p);
+      if (!v || plain.has(v) || v.length > 140 || (p === "opacity" && v === "1") || (p === "border" && v.startsWith("0px"))) continue;
+      css.push(`${p}:${p === "font-family" ? v.split(",")[0] : v}`);
+    }
+    extra.css = css.join("; ");
+    const root = document.documentElement;
+    const dark = root.classList.contains("dark") || root.dataset.theme === "dark" ||
+      (!root.classList.contains("light") && root.dataset.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+    extra.viewport = `${innerWidth}x${innerHeight} px at ${devicePixelRatio}x, scrolled to ${Math.round(scrollX)},${Math.round(scrollY)}, ${dark ? "dark" : "light"} theme`;
+    // A name for the element when it has none of its own: the first label inside it.
+    const named = el.matches("[aria-label],[placeholder],[alt],[title]") ? el : el.querySelector("[aria-label],[placeholder],[alt]");
+    const hint = named && (named.getAttribute("aria-label") || named.getAttribute("placeholder") || named.getAttribute("alt") || named.getAttribute("title"));
+    if (hint) extra.hint = hint.slice(0, 120);
+  } catch {}
   const add = (name) => {
     if (typeof name === "string" && name && name.length < 80 && components.length < 8 && components.at(-1) !== name) components.push(name);
   };
@@ -160,18 +185,29 @@ function sourceOf(mark) {
   const library = /node_modules|react-dom|react\.development|jsx-dev-runtime|jsx-runtime|chunk-[A-Z0-9]+\.js/;
   try {
     const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
-    for (let f = key ? el[key] : null, n = 0; f && n < 300; f = f.return, n++) {
+    // The file and line that wrote this fiber's JSX.
+    const written = (f) => {
       const s = f._debugSource; // React 18 and older
-      if (!source && s?.fileName) source = `${tidy(s.fileName)}:${s.lineNumber}${s.columnNumber ? ":" + s.columnNumber : ""}`;
-      if (!source && typeof f._debugStack?.stack === "string") { // React 19
+      if (s?.fileName) return `${tidy(s.fileName)}:${s.lineNumber}${s.columnNumber ? ":" + s.columnNumber : ""}`;
+      if (typeof f._debugStack?.stack === "string") { // React 19
         for (const line of f._debugStack.stack.split("\n").slice(1)) {
           const m = line.match(/((?:https?|webpack-internal|file):\/\/[^\s)]+?):(\d+):(\d+)\)?\s*$/);
-          if (m && !library.test(m[1])) { source = `${tidy(m[1])}:${m[2]}:${m[3]}`; break; }
+          if (m && !library.test(m[1])) return `${tidy(m[1])}:${m[2]}:${m[3]}`;
         }
       }
+      return null;
+    };
+    for (let f = key ? el[key] : null, n = 0; f && n < 300; f = f.return, n++) {
+      if (!source) source = written(f);
       const t = f.type;
-      if (typeof t === "function") add(t.displayName || t.name);
-      else if (t && typeof t === "object") add(t.displayName || t.render?.displayName || t.render?.name || t.type?.displayName || t.type?.name);
+      const name = typeof t === "function" ? t.displayName || t.name
+        : t && typeof t === "object" ? t.displayName || t.render?.displayName || t.render?.name || t.type?.displayName || t.type?.name : null;
+      const before = components.length;
+      add(name);
+      if (components.length > before && name.length > 2 && usedAt.length < 5) {
+        const at = written(f);
+        if (at) usedAt.push(`${name} at ${at}`);
+      }
     }
     for (let v = el.__vueParentComponent, n = 0; v && n < 50; v = v.parent, n++) {
       add(v.type?.__name || v.type?.name);
@@ -180,7 +216,7 @@ function sourceOf(mark) {
     const loc = el.__svelte_meta?.loc;
     if (!source && loc?.file) source = `${tidy(loc.file)}:${loc.line}:${loc.column}`;
   } catch {}
-  return components.length || source ? { components, source } : null;
+  return { components, source, usedAt, ...extra };
 }
 
 // Runs `func` in the tab's top frame, injecting page.js first if it is not there yet.
