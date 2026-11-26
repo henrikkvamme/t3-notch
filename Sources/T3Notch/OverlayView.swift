@@ -32,21 +32,8 @@ final class OverlayUIState {
     var inputShows = false
     /// Screen clips waiting to go with the next message.
     var clips: [Clip] = []
-    /// Removed clips, newest last, with their old position, for ⌘Z / ⌃Z.
-    var removedClips: [(clip: Clip, index: Int)] = []
     /// The element level picked while clipping; kept across clipping until the message is sent.
     var clipDepth = 0
-    /// The draft when the last clip was removed; undo restores clips only while it is unchanged,
-    /// so ⌘Z after typing still undoes typing.
-    var draftAtClipRemoval = ""
-
-    /// Brings back the most recently removed clip. False when there is nothing to restore.
-    func undoClipRemoval() -> Bool {
-        guard let last = removedClips.last, draft == draftAtClipRemoval else { return false }
-        removedClips.removeLast()
-        clips.insert(last.clip, at: min(last.index, clips.count))
-        return true
-    }
     /// Permissions clipping still needs; each shows as a button that opens its settings.
     var missingPermissions: [Permission] = []
     var onOpenPermission: ((Permission) -> Void)?
@@ -101,7 +88,6 @@ struct OverlayView: View {
     @Bindable var ui: OverlayUIState
     @Namespace private var glass
     /// The clip thumbnail under the pointer, which shows a preview and a remove mark.
-    @State private var hoveredClip: UUID?
 
     private var shown: Bool { ui.mode != .hidden }
     private var compact: Bool { ui.mode == .peek && ui.peekCompact && store.pendingRequest == nil }
@@ -149,7 +135,7 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip,
+         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, ui.editingClip,
          ui.onboarding, ui.onboardingKeysLit, ui.onboardingTried]
     }
 
@@ -191,7 +177,7 @@ struct OverlayView: View {
                             if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
                                 permissionRow.padding(.top, 10).transition(.blurReplace)
                             }
-                            if ui.mode == .expanded && (!ui.clips.isEmpty || ui.landing) {
+                            if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip }) {
                                 clipRow.padding(.top, 10).transition(.blurReplace)
                             }
                             if ui.mode == .expanded {
@@ -395,12 +381,17 @@ struct OverlayView: View {
     /// is out of sight only without a chat, and while the agent asks for an answer and you
     /// have typed nothing: then it is mounted (so it holds keyboard focus) but collapsed.
     private var input: some View {
-        let typing = !ui.draft.isEmpty || !ui.clips.isEmpty
+        let typing = !ui.draft.isEmpty || !ui.clips.isEmpty || ui.landing
             || (store.pendingRequest == nil && store.targetThreadId != nil)
-        return TextField("Message", text: $ui.draft, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(.system(size: 14))
-            .lineLimit(1...6)
+        // Selections sit in the text as chips, where the caret was (see `DraftField`).
+        return DraftField(ui: ui, draft: ui.draft, clips: ui.clips,
+                          labels: ui.clips.map { $0.comment.isEmpty ? $0.label : $0.comment },
+                          editing: ui.editingClip, landing: ui.landing, onSubmit: sendDraft)
+            .overlay(alignment: .topLeading) {
+                if ui.draft.isEmpty && ui.clips.isEmpty {
+                    Text("Message").font(.system(size: 14)).foregroundStyle(.tertiary).allowsHitTesting(false)
+                }
+            }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .glassEffect(typing ? .regular.interactive() : .identity, in: .rect(cornerRadius: 16))
             .glassEffectID("field", in: glass) // morphs into the ⌘K search field
@@ -409,7 +400,6 @@ struct OverlayView: View {
             .opacity(typing ? 1 : 0)
             .blur(radius: typing ? 0 : 6)
             .scaleEffect(typing ? 1 : 0.96, anchor: .top)
-            .onSubmit(sendDraft)
             // Collapsing can drop keyboard focus; take it back so the next key types.
             .onChange(of: typing, initial: true) { _, now in
                 ui.inputShows = now
@@ -464,7 +454,7 @@ struct OverlayView: View {
             return
         }
         ui.onDraftSent?()
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.clipDepth = 0 }
         ui.sending += 1
         let to = store.targetThreadId
         Task {
@@ -522,87 +512,16 @@ struct OverlayView: View {
         .animation(Motion.content, value: ui.missingPermissions)
     }
 
-    /// Selections waiting to be sent, as chips: a small picture and the comment, or what the
-    /// selection is. A click on one opens its comment; its ✕ removes it.
-    private var clipRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ChipFlow(spacing: 6) {
-                ForEach(ui.clips) { clip in
-                    let hovered = hoveredClip == clip.id
-                    let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    HStack(spacing: 6) {
-                        Image(nsImage: clip.thumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 20, height: 20)
-                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        Text(clip.comment.isEmpty ? clip.label : clip.comment)
-                            .font(.system(size: 12))
-                            .foregroundStyle(clip.comment.isEmpty ? .secondary : .primary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .padding(.leading, 4).padding(.trailing, 9).padding(.vertical, 4)
-                    .frame(maxWidth: 190, alignment: .leading)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .background(.white.opacity(hovered ? 0.14 : 0.08), in: shape)
-                    .overlay(shape.strokeBorder(ui.editingClip == clip.id ? Color.accentColor : .white.opacity(0.12),
-                                                lineWidth: ui.editingClip == clip.id ? 1.5 : 1))
-                    .contentShape(shape)
-                    .onTapGesture {
-                        withAnimation(Motion.content) { ui.editingClip = ui.editingClip == clip.id ? nil : clip.id }
-                        ui.onRequestFocus?()
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        // The ✕ removes the selection.
-                        if hovered {
-                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
-                                .frame(width: 16, height: 16)
-                                .glassEffect(.regular, in: .circle)
-                                .contentShape(Circle())
-                                .onTapGesture {
-                                    withAnimation(Motion.content) {
-                                        if let i = ui.clips.firstIndex(of: clip) {
-                                            ui.removedClips.append((clip, i))
-                                            ui.draftAtClipRemoval = ui.draft
-                                            ui.clips.remove(at: i)
-                                        }
-                                        if hoveredClip == clip.id { hoveredClip = nil }
-                                        if ui.editingClip == clip.id { ui.editingClip = nil }
-                                    }
-                                }
-                                .offset(x: 5, y: -5)
-                                .transition(.blurReplace.combined(with: .scale(0.6)))
-                        }
-                    }
-                    .onHover { inside in
-                        withAnimation(Motion.snappy) {
-                            if inside { hoveredClip = clip.id } else if hoveredClip == clip.id { hoveredClip = nil }
-                        }
-                    }
-                    .transition(.blurReplace.combined(with: .scale(0.8)))
-                }
-                // Where the selection that is flying in will sit.
-                if ui.landing {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(.white.opacity(0.06))
-                        .frame(width: 44, height: 28)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ui.landingSlot = $0 }
-                        .transition(.opacity)
-                }
-            }
-            // A larger preview of the hovered clip, or of the one whose comment is open.
-            if let clip = ui.clips.first(where: { $0.id == hoveredClip }) ?? ui.clips.first(where: { $0.id == ui.editingClip }) {
-                Image(nsImage: clip.thumbnail)
+    /// The selection whose chip you clicked: a larger picture and its comment. ⏎ and Esc go
+    /// back to the message.
+    @ViewBuilder private var clipRow: some View {
+        if let i = ui.clips.firstIndex(where: { $0.id == ui.editingClip }) {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(nsImage: ui.clips[i].thumbnail)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: 240, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .id(clip.id)
-                    .transition(.blurReplace)
-            }
-            // The open selection's comment. ⏎ and Esc go back to the message.
-            if let i = ui.clips.firstIndex(where: { $0.id == ui.editingClip }) {
                 TextField("Comment on this selection", text: Binding(
                     get: { ui.clips.indices.contains(i) ? ui.clips[i].comment : "" },
                     set: { if ui.clips.indices.contains(i) { ui.clips[i].comment = $0 } }), axis: .vertical)
@@ -615,14 +534,9 @@ struct OverlayView: View {
                         withAnimation(Motion.content) { ui.editingClip = nil }
                         ui.onRequestFocus?()
                     }
-                    .id(ui.editingClip)
-                    .transition(.blurReplace)
             }
+            .id(ui.editingClip)
         }
-        .animation(Motion.content, value: ui.editingClip)
-        .animation(Motion.content, value: ui.clips)
-        .animation(Motion.content, value: ui.landing)
-        .animation(Motion.content, value: hoveredClip)
     }
 
     /// A reply in full text; the agent's thinking or current step dimmed; and before its
@@ -797,33 +711,5 @@ private struct HeaderIcon: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(Motion.snappy, value: hovering)
-    }
-}
-
-/// Lays chips out in rows, left to right, and starts a new row when one is full.
-struct ChipFlow: Layout {
-    var spacing: CGFloat = 6
-
-    private func rows(_ subviews: Subviews, width: CGFloat) -> (frames: [CGRect], size: CGSize) {
-        var frames: [CGRect] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
-            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-            widest = max(widest, x - spacing)
-        }
-        return (frames, CGSize(width: widest, height: y + rowHeight))
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        rows(subviews, width: proposal.width ?? .infinity).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for (sub, frame) in zip(subviews, rows(subviews, width: bounds.width).frames) {
-            sub.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: .unspecified)
-        }
     }
 }

@@ -1065,8 +1065,9 @@ final class Store {
                 // Each image is a chip in the message, as T3 writes its own: a reference in the
                 // text (`![label](t3-context://v1/image/<id>)`) and a record that binds it to
                 // the attachment (`packages/contracts/src/composerContext.ts`).
-                var chips: [String] = [], records: [JSON] = upload.elements
-                for (attachment, label) in zip(command["attachments"]?.array ?? [], upload.labels) {
+                // The chips of each clip, by the clip's index: its picture, then what the app knows.
+                var chips: [Int: [String]] = [:], records: [JSON] = upload.elements
+                for (i, (attachment, label)) in zip(command["attachments"]?.array ?? [], upload.labels).enumerated() {
                     guard let id = attachment["id"].string, let name = attachment["name"].string else { continue }
                     let contextId = "image_" + String(id.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }.prefix(120))
                     let clean = label.map { "[]\\\r\n".contains($0) ? " " : $0 }
@@ -1079,15 +1080,15 @@ final class Store {
                     ]
                     if !attachment["source"].isNull { record["source"] = attachment["source"] }
                     records.append(.object(record))
-                    chips.append("![\(shown)](t3-context://v1/image/\(contextId))")
+                    chips[i, default: []].append("![\(shown)](t3-context://v1/image/\(contextId))")
                 }
                 // What the app knows about each selection is a chip too. T3 keeps it out of the
                 // message the user reads and gives it to the agent.
-                for e in upload.elements {
+                for (e, i) in zip(upload.elements, upload.elementClips) {
                     guard let id = e["contextId"].string, let label = e["label"].string else { continue }
-                    chips.append("[\(label)](t3-context://v1/element/\(id))")
+                    chips[i, default: []].append("[\(label)](t3-context://v1/element/\(id))")
                 }
-                command["text"] = .string(([trimmed] + chips).filter { !$0.isEmpty }.joined(separator: " "))
+                command["text"] = .string(Self.textWithChips(text, clips: clips, chips: chips))
                 if !records.isEmpty { command["context"] = ["version": .number(1), "records": .array(records)] }
             }
             _ = try await target.rpc.call("orchestration.dispatchCommand", .object(command))
@@ -1105,11 +1106,13 @@ final class Store {
     /// Each clip as one image plus a T3 `element` record with what the app knows about it.
     /// The image is the selection with its surroundings, outlined, or the close-up alone
     /// when the app gave no context or T3's limits would be passed.
-    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], labels: [String], elements: [JSON]) {
+    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], labels: [String], elements: [JSON], elementClips: [Int]) {
         var images: [JSON] = []
         // What T3 writes on each image's chip, in the order of `images`.
         var labels: [String] = []
         var elements: [JSON] = []
+        // The clip each element record is for, in the order of `elements`.
+        var elementClips: [Int] = []
         let batch = UUID().uuidString.lowercased().prefix(8)
         func image(_ name: String, _ png: Data, source: JSON? = nil) -> JSON {
             var o: [String: JSON] = ["type": "image", "name": .string(name), "mimeType": "image/png",
@@ -1118,7 +1121,7 @@ final class Store {
             if let source { o["source"] = source }
             return .object(o)
         }
-        guard let plan = clipPlan(clips) else { return ([], [], []) }
+        guard let plan = clipPlan(clips) else { return ([], [], [], []) }
         for (i, (clip, p)) in zip(clips, plan).enumerated() {
             let n = i + 1
             guard let ctx = clip.context else {
@@ -1134,8 +1137,32 @@ final class Store {
             labels.append(ctx.page.flatMap { $0.name ?? $0.hint ?? $0.text } ?? ctx.element.flatMap { $0.name ?? $0.description }
                           ?? ctx.elementText ?? "Selection \(n)")
             elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name, comment: clip.comment))
+            elementClips.append(i)
         }
-        return (images, labels, elements)
+        return (images, labels, elements, elementClips)
+    }
+
+    /// The message with each clip's chips at the clip's place in the text, as the island's
+    /// field showed it. A clip with no place goes to the end.
+    static func textWithChips(_ text: String, clips: [Clip], chips: [Int: [String]]) -> String {
+        let whole = text as NSString
+        let placed = clips.indices
+            .compactMap { i in chips[i].map { (at: min(max(clips[i].offset ?? whole.length, 0), whole.length), text: $0.joined(separator: " ")) } }
+        var out = "", at = 0
+        func space(before next: String) {
+            if let last = out.last, !last.isWhitespace, let first = next.first, !first.isWhitespace { out += " " }
+        }
+        // `clips` is in the order of the text; the sort keeps that order for equal places.
+        for chip in placed.enumerated().sorted(by: { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }).map(\.element) {
+            out += whole.substring(with: NSRange(location: at, length: chip.at - at))
+            at = chip.at
+            space(before: chip.text)
+            out += chip.text
+        }
+        let rest = whole.substring(from: at)
+        space(before: rest)
+        out += rest
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// T3's limits for one message: 100 images and 80 MiB.

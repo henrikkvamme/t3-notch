@@ -217,7 +217,6 @@ final class PanelController {
         guard !text.isEmpty || !clips.isEmpty, store.targetThreadId != nil else { return }
         ui.draft = ""
         ui.clips = []
-        ui.removedClips = []
         if let pid { Handoff.pasteClips(clips, text: pasteText ? text : "", into: pid) }
     }
 
@@ -517,10 +516,9 @@ final class PanelController {
         if Settings.openInT3Key.matches(event) { // ⌘O by default: open in T3, hide the island
             openInT3(); return true
         }
-        // A selection's comment is open: ⏎ and ⌘Z are that field's keys, not the approval's or
-        // the clip row's.
+        // A selection's comment is open: ⏎ is that field's key, not the approval's.
         let commenting = ui.editingClip.map { id in ui.clips.contains { $0.id == id } } ?? false
-        if commenting, (event.keyCode == 36 && !cmd) || event.keyCode == 6 { return false }
+        if commenting, event.keyCode == 36 && !cmd { return false }
         switch event.keyCode {
         case 53: // Esc
             if ui.pickerOpen { setPicker(false); return true }
@@ -530,10 +528,6 @@ final class PanelController {
             }
             if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
-        case 6 where (cmd || ctrl) && !shift: // ⌘Z / ⌃Z: restore a removed clip, else normal undo
-            var restored = false
-            withAnimation(Motion.content) { restored = ui.undoClipRemoval() }
-            return restored
         case 43 where cmd: // ⌘, opens settings
             onOpenSettings?(); return true
         case 35 where cmd: // ⌘P enters clipping mode
@@ -596,7 +590,7 @@ final class PanelController {
             return
         }
         draftSent()
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
+        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.clipDepth = 0 }
         ui.sending += 1
         let to = store.targetThreadId
         Task {
