@@ -378,12 +378,12 @@ struct OverlayView: View {
         ui.answerDrafts[Self.draftKey(request, question)] ?? AnswerDraft()
     }
 
-    /// The input stays out of sight until you type: it is mounted (so it holds keyboard
-    /// focus) but collapsed to nothing, then springs open with the first character.
+    /// The input shows whenever the island is open on a chat, so you see where you type. It
+    /// is out of sight only without a chat, and while the agent asks for an answer and you
+    /// have typed nothing: then it is mounted (so it holds keyboard focus) but collapsed.
     private var input: some View {
-        // Open with text or a selection, and in a chat with nothing to show yet.
         let typing = !ui.draft.isEmpty || !ui.clips.isEmpty
-            || (store.latestReply == nil && store.pendingRequest == nil && store.targetThreadId != nil)
+            || (store.pendingRequest == nil && store.targetThreadId != nil)
         return TextField("Message", text: $ui.draft, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.system(size: 14))
