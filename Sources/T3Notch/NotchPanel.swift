@@ -450,6 +450,38 @@ final class PanelController {
         }
     }
 
+    /// A tap of ⌃⌥ from any app: select what is under the pointer without opening the island
+    /// first. Picks go to the focused chat and open the island; Esc with no picks leaves
+    /// everything as it was.
+    func startSelecting() {
+        guard clipper == nil, ui.mode != .expanded else { return }
+        guard Permission.screenRecording.isGranted, Permission.accessibility.isGranted else {
+            expand()
+            showMissingPermissions()
+            return
+        }
+        let wasPeeking = ui.mode != .hidden
+        orderOutTask?.cancel()
+        ui.mode = .hidden
+        ui.pickerOpen = false
+        panel.ignoresMouseEvents = true
+        panel.orderOut(nil)
+        let destination = ClipController.Destination(
+            title: { [weak self] in self?.store.targetTitle },
+            cycle: { [weak self] step in self?.store.cycleTarget(step) })
+        clipper = ClipController.start(depth: ui.clipDepth, destination: destination) { [weak self] clips, depth in
+            guard let self else { return }
+            self.clipper = nil
+            self.ui.clipDepth = depth
+            if clips.isEmpty {
+                if wasPeeking { self.peek(autoHide: true) }
+                return
+            }
+            self.ui.clips += clips
+            self.expand()
+        }
+    }
+
     // MARK: - Permissions
 
     private var clipWhenAllowed = false

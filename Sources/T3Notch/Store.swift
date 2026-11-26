@@ -245,6 +245,20 @@ final class Store {
         return id
     }
 
+    /// Moves the focused chat one row down (+1) or up (−1) in the sidebar order, wrapping.
+    /// Select mode's ⇥ uses it to pick where the selection goes.
+    func cycleTarget(_ step: Int) {
+        let ids = sidebarThreads.prefix(60).compactMap { $0["id"].string }
+        guard !ids.isEmpty else { return }
+        let now = targetThreadId.flatMap { ids.firstIndex(of: $0) } ?? (step > 0 ? -1 : 0)
+        focusedThreadId = ids[((now + step) % ids.count + ids.count) % ids.count]
+    }
+
+    /// The focused chat's title, for select mode's destination label.
+    var targetTitle: String? {
+        targetThreadId.flatMap { threads[$0]?["title"].string }
+    }
+
     /// Mirrors T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`):
     /// pinned threads by `pinOrderKey` (unkeyed ones newest first, after keyed), then
     /// active threads by `activeOrderKey` (unkeyed ones first, newest first).
@@ -794,6 +808,12 @@ enum Settings {
     static var expandOnHover: Bool {
         get { UserDefaults.standard.object(forKey: "expandOnHover") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
+    }
+
+    /// A tap of ⌃⌥ from any app starts select mode. On by default.
+    static var controlOptionSelect: Bool {
+        get { UserDefaults.standard.object(forKey: "controlOptionSelect") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "controlOptionSelect") }
     }
 
     /// Pop the island open when the focused chat's run ends. On by default.
