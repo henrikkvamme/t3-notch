@@ -60,6 +60,9 @@ final class ClipController {
     private var captured = false
     /// ⏎ was pressed: the selection goes to the chat (true steers).
     private var sending: Bool?
+    /// The chat that showed when ⏎ was pressed. The end can come a second later, and the
+    /// island's chat can change in that time.
+    private var sendTo: String?
     /// The comment did not go out with a selection; it goes to the island.
     private var unsent = false
     /// Select mode ended because the hold ended, not by Esc.
@@ -80,6 +83,8 @@ final class ClipController {
     struct Select {
         /// The title of the chat the comment goes to, nil with none.
         let title: () -> String?
+        /// The id of that chat, nil with none.
+        let target: () -> String?
         /// ⇥ and ⇧⇥: the next or previous chat.
         let cycle: (Int) -> Void
         let onEnd: (SelectEnd) -> Void
@@ -94,8 +99,9 @@ final class ClipController {
         case released
         /// Esc, or another app took the keyboard.
         case cancelled
-        /// ⏎: the selection and its comment, for the chat. `steer` for ⌘⏎.
-        case send(Clip, comment: String, steer: Bool)
+        /// ⏎: the selection and its comment, for the chat that showed when ⏎ was pressed
+        /// (`to`, nil with none). `steer` for ⌘⏎.
+        case send(Clip, comment: String, steer: Bool, to: String?)
         /// The screen could not be captured (Screen Recording is off), so there is no
         /// selection to send. The comment goes to the island.
         case unsent(comment: String)
@@ -383,7 +389,7 @@ final class ClipController {
             guard let select else { onFinish(state.clips, state.depth); return }
             let comment = state.comment.trimmingCharacters(in: .whitespacesAndNewlines)
             if let steer = sending, let clip = state.clips.first {
-                select.onEnd(.send(clip, comment: comment, steer: steer))
+                select.onEnd(.send(clip, comment: comment, steer: steer, to: sendTo))
             } else {
                 select.onEnd(unsent ? .unsent(comment: comment) : released ? .released : .cancelled)
             }
@@ -420,6 +426,7 @@ final class ClipController {
         guard let tap = EventTap(events, handler: { [weak self] type, event in self?.tapped(type, event) ?? false })
         else { return false }
         self.tap = tap
+        tap.onMissedEvents = { [weak self] in self?.missedEvents() }
         state.phase = .hover
         state.destination = select?.title() ?? ""
         showOverlays(takesMouse: false)
@@ -460,6 +467,16 @@ final class ClipController {
         guard state.phase == .hover, !finished, pressAt == nil, !clicking else { return }
         released = true
         finish()
+    }
+
+    /// The tap was off for a moment. A press it holds may have ended unseen, and would keep
+    /// `release` from ending the hold: drop it. The hold ends here if the keys went up too.
+    private func missedEvents() {
+        guard state.phase == .hover, !finished else { return }
+        pressAt = nil
+        state.drag = nil
+        let flags = NSEvent.modifierFlags
+        if !flags.contains(.control) || !flags.contains(.option) { release() }
     }
 
     /// An event the tap saw. Returns true to keep it from the app under the pointer.
@@ -626,8 +643,10 @@ final class ClipController {
                 return true
             }
             guard mods.isEmpty || mods == .command else { return false }
+            if sendWhenFrozen == nil { sendTo = select?.target() }
             send(steer: mods == .command)
         case kVK_Tab where mods.subtracting(.shift).isEmpty: // ⇥ / ⇧⇥: the chat it goes to
+            guard sendWhenFrozen == nil else { return true } // ⏎ was pressed: the chat is set
             select?.cycle(mods.contains(.shift) ? -1 : 1)
             state.destination = select?.title() ?? ""
         case kVK_ANSI_K where control, kVK_ANSI_P where control: keyboardStep(1)

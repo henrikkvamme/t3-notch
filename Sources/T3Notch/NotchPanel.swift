@@ -496,6 +496,7 @@ final class PanelController {
         let islandHadKeys = panel.isKeyWindow
         var select = ClipController.Select(
             title: { [weak self] in self?.store.targetTitle },
+            target: { [weak self] in self?.store.targetThreadId },
             cycle: { [weak self] step in self?.store.cycleTarget(step) },
             onEnd: { [weak self] end in self?.selectEnded(end, islandHadKeys: islandHadKeys, inTour: inTour) })
         if inTour { select.onScroll = { [weak self] in self?.onboardingSelectScrolled() } }
@@ -512,7 +513,7 @@ final class PanelController {
             return // the hold trigger knows: it reported the end, or gets the same key event
         case .cancelled:
             break
-        case let .send(clip, comment, steer):
+        case let .send(clip, comment, steer, to):
             let size = clip.thumbnail.size
             selectLog.notice("""
                 send \(Int(size.width), privacy: .public)x\(Int(size.height), privacy: .public) \
@@ -522,15 +523,14 @@ final class PanelController {
                 """)
             // No chat to send to: the island takes them and opens on the list of chats. The
             // tour sends nothing either: a first try must not start an agent.
-            guard !selectSendsNothing, !inTour, store.targetThreadId != nil, Store.clipPlan([clip]) != nil else {
+            guard !selectSendsNothing, !inTour, let to, Store.clipPlan([clip]) != nil else {
                 keep(clip, comment)
                 return
             }
             Task { [weak self] in
                 guard let self else { return }
-                await self.store.send(comment, steer: steer, clips: [clip])
                 // Not sent: the island shows why, with the selection and the comment back in it.
-                if self.store.lastSendError != nil { self.keep(clip, comment) }
+                if await !self.store.send(comment, steer: steer, clips: [clip], to: to) { self.keep(clip, comment) }
             }
         case let .unsent(comment):
             keep(nil, comment)

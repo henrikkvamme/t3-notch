@@ -21,6 +21,9 @@ final class EventTap {
     private var source: CFRunLoopSource?
     /// Returns true to keep the event from the app.
     fileprivate let handler: (CGEventType, CGEvent) -> Bool
+    /// macOS turned the tap off for a moment, so events were missed: a button that went down
+    /// may have gone up unseen.
+    var onMissedEvents: (() -> Void)?
 
     init?(_ types: [CGEventType], handler: @escaping (CGEventType, CGEvent) -> Bool) {
         self.handler = handler
@@ -62,6 +65,7 @@ private func eventTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: 
         let tap = Unmanaged<EventTap>.fromOpaque(refcon).takeUnretainedValue()
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             tap.enable()
+            tap.onMissedEvents?()
             return false
         }
         return tap.handler(type, event)

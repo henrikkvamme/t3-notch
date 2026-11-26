@@ -584,22 +584,26 @@ final class Store {
     /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
     /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
     /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
-    func send(_ text: String, steer: Bool = false, clips: [Clip] = []) async {
+    /// Goes to the chat `to`, or to the island's chat without one. Returns false when this
+    /// message did not go out; `lastSendError` then says why.
+    @discardableResult
+    func send(_ text: String, steer: Bool = false, clips: [Clip] = [], to: String? = nil) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !clips.isEmpty else { return }
-        guard let threadId = targetThreadId else {
+        guard !trimmed.isEmpty || !clips.isEmpty else { return true }
+        guard let threadId = to ?? targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
                 : "No thread to send to. Pin one in T3 or pick one with ⌘K."
             if threads.isEmpty { reconnectNow() }
-            return
+            return false
         }
         if Store.demo {
             onDemoSend?(trimmed, steer, clips.count)
-            return
+            return true
         }
         let id = UUID().uuidString.lowercased()
         lastSendError = nil
+        var sent = false
         var command: [String: JSON] = [
             "type": "message.dispatch",
             "commandId": .string(id),
@@ -623,10 +627,12 @@ final class Store {
             }
             _ = try await rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = threadId
+            sent = true
         } catch {
             handleCommandError(error)
         }
         syncThreadSubscription()
+        return sent
     }
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
