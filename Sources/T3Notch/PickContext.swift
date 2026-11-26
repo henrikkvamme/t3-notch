@@ -55,6 +55,40 @@ struct PickContext: Sendable {
     var windowScale: CGFloat = 1
     /// The reader left nodes out (depth, node count, child count or time limit).
     var readTruncated = false
+    /// The picked page element, from the browser extension.
+    var page: PageElement?
+
+    /// A page element as the browser extension describes it. Text is clipped and the HTML
+    /// has no scripts, styles, inline handlers or typed values.
+    struct PageElement: Sendable {
+        var selector: String
+        var tag: String
+        var role: String?
+        var name: String?
+        var text: String?
+        var value: String?
+        var html: String?
+        var attributes: [String: String]
+    }
+
+    /// Takes the extension's description of the picked page element: the element, the page
+    /// URL and the path from the web area down.
+    mutating func applyPage(_ d: [String: Any]) {
+        guard let selector = d["selector"] as? String, let tag = d["tag"] as? String else { return }
+        func str(_ k: String, _ max: Int) -> String? { (d[k] as? String).map { Self.clip($0, max) }.flatMap { $0.isEmpty ? nil : $0 } }
+        let attributes = (d["attributes"] as? [String: String] ?? [:]).prefix(30)
+            .reduce(into: [String: String]()) { $0[Self.clip($1.key, 60)] = Self.clip($1.value, 200) }
+        page = PageElement(selector: Self.clip(selector, 1000), tag: Self.clip(tag, 40), role: str("role", 60),
+                           name: str("name", 300), text: str("text", 4000), value: str("value", 2000),
+                           html: str("html", 6000), attributes: attributes)
+        if let u = d["url"] as? String { url = PickReader.sanitize(u) }
+        let pick = PickElement(role: page!.role.map { "\(tag)[\($0)]" } ?? tag, name: page!.name, value: page!.value,
+                               description: nil, identifier: attributes["id"], frame: clipFrame)
+        // `path` ends at the web area here (the pick was read without its subtree).
+        let ancestors = (d["path"] as? [String] ?? []).suffix(30).map { PickElement(role: Self.clip($0, 120)) }
+        path += ancestors + [pick]
+        element = pick
+    }
 
     /// Trims and shortens to at most `max` UTF-16 units, as T3's schema counts string length
     /// (JavaScript), cutting only between characters.
@@ -102,7 +136,8 @@ enum PickReader {
     /// Reads the app, window and element for a clip. Runs off the main thread; every
     /// accessibility call has a short timeout and the subtree is capped.
     static func read(pid: pid_t, windowID: CGWindowID?, windowFrame: CGRect, clipFrame: CGRect,
-                     element: AXUIElement?, screenshot: CGImage?, screenshotRect: CGRect) -> PickContext {
+                     element: AXUIElement?, subtree: Bool = true, screenshot: CGImage?,
+                     screenshotRect: CGRect) -> PickContext {
         let app = NSRunningApplication(processIdentifier: pid)
         var ctx = PickContext(appName: app?.localizedName ?? "Unknown app", bundleID: app?.bundleIdentifier,
                               appIconPNG: app?.icon.flatMap(iconPNG), windowTitle: windowTitle(windowID) ?? "",
@@ -118,8 +153,8 @@ enum PickReader {
                 let chain = ancestors(of: element, deadline: deadline)
                 ctx.path = chain.map { redacted(node(of: $0), isPick: false, visible: windowFrame) }
                 var budget = 150, cut = chain.count >= 40
-                ctx.element = tree(of: element, depth: 4, budget: &budget, deadline: deadline, cut: &cut, isPick: true,
-                                   visible: windowFrame)
+                ctx.element = tree(of: element, depth: subtree ? 4 : 0, budget: &budget, deadline: deadline, cut: &cut,
+                                   isPick: true, visible: windowFrame)
                 ctx.readTruncated = cut
                 if Date() < deadline { ctx.url = url(above: element, deadline: deadline) }
                 if let title = ctx.path.first(where: { $0.role == kAXWindowRole as String })?.name, ctx.windowTitle.isEmpty {
@@ -298,7 +333,7 @@ enum PickReader {
         return v as? String
     }
 
-    private static func urlValue(_ e: AXUIElement, _ attr: String) -> String? {
+    static func urlValue(_ e: AXUIElement, _ attr: String) -> String? {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(e, attr as CFString, &v) == .success, let v else { return nil }
         return (v as? URL)?.absoluteString ?? (v as? String)
@@ -448,6 +483,16 @@ extension PickContext {
             if let t = elementText { el["text"] = .string(t) }
             if !path.isEmpty { el["path"] = .string(path.map(\.label).joined(separator: " > ")) }
             o["element"] = .object(el)
+            if let p = page {
+                var d: [String: JSON] = ["selector": .string(p.selector), "tag": .string(p.tag)]
+                if let s = p.role { d["role"] = .string(s) }
+                if let s = p.name { d["name"] = .string(s) }
+                if let s = p.text { d["text"] = .string(s) }
+                if let s = p.value { d["value"] = .string(s) }
+                if let s = p.html { d["html"] = .string(s) }
+                if !p.attributes.isEmpty { d["attributes"] = .object(p.attributes.mapValues { .string($0) }) }
+                o["dom"] = .object(d)
+            }
         } else {
             o["element"] = "dragged rectangle, no element"
         }

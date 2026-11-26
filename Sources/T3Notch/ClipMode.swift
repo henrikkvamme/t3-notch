@@ -31,6 +31,7 @@ final class ClipController {
     private let state = ClipState()
     private var windows: [NotchPanel] = []
     private var monitors: [Any] = []
+    private var resignObserver: Any?
     private let probe = ElementProbe()
     private let onFinish: ([Clip], Int) -> Void
     private var finished = false
@@ -129,6 +130,11 @@ final class ClipController {
     }
 
     private func installMonitors() {
+        // Keys reach the mode only while T3 Notch is the active app. When another app takes
+        // focus (⌘⇥, a dialog), end the mode, or Esc and ⏎ would go to that app.
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.finish() } }
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
             return MainActor.assumeIsolated { self.key(e) } ? nil : e
@@ -214,8 +220,18 @@ final class ClipController {
     /// element, and keeps it there until the pointer moves 8pt.
     private func sibling(_ direction: Int) {
         if leavePreset() { return }
-        guard let h = state.highlight, let element = state.element(for: h) else { return }
+        guard let h = state.highlight else { return }
         let p = state.probe
+        if let node = state.dom(for: h) {
+            let generation = beginNavigation()
+            probe.domSibling(of: node, direction: direction, base: p) { [weak self] result in
+                guard let self, self.navigation == generation, let result, let first = result.frames.first else { return }
+                self.state.setProbe(result)
+                self.state.anchor(first)
+            }
+            return
+        }
+        guard let element = state.element(for: h) else { return }
         let generation = beginNavigation()
         probe.sibling(of: element, direction: direction, pid: p.pid, windowID: p.windowID, window: p.window) { [weak self] result in
             guard let self, self.navigation == generation, let result, let first = result.frames.first else { return }
@@ -266,15 +282,20 @@ final class ClipController {
         if let id = p.windowID {
             guard let then = state.frozenWindows[id], then.isSame(as: p.window) else { return }
         }
-        let element = (p.frames.first?.isSame(as: rect) == true ? p.elements.first ?? nil : state.element(for: rect))
-            .map(AXRef.init)
+        // A page element: read the accessibility path to the web area, then ask the extension.
+        let node = p.frames.first?.isSame(as: rect) == true ? p.dom(at: 0) : state.dom(for: rect)
+        let element = node != nil ? p.webAreaElement.map(AXRef.init)
+            : (p.frames.first?.isSame(as: rect) == true ? p.elements.first ?? nil : state.element(for: rect)).map(AXRef.init)
         // The screen with the selection, so the window image always shows it (a window that
         // spans screens is cut to this one).
         let shot = state.frozenScreen(for: rect)
         pendingContexts += 1
         probe.context({
-            PickReader.read(pid: p.pid, windowID: p.windowID, windowFrame: p.window, clipFrame: rect,
-                            element: element?.element, screenshot: shot?.image, screenshotRect: shot?.rect ?? .null)
+            var ctx = PickReader.read(pid: p.pid, windowID: p.windowID, windowFrame: p.window, clipFrame: rect,
+                                      element: element?.element, subtree: node == nil,
+                                      screenshot: shot?.image, screenshotRect: shot?.rect ?? .null)
+            if let node, let d = BrowserBridge.shared.describe(node) { ctx.applyPage(d) }
+            return ctx
         }) { [weak self] ctx in
             guard let self else { return }
             if let i = self.state.clips.firstIndex(where: { $0.id == id }) { self.state.clips[i].context = ctx }
@@ -301,13 +322,15 @@ final class ClipController {
         for m in monitors { NSEvent.removeMonitor(m) }
         NSCursor.unhide()
         monitors = []
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
         withAnimation(Motion.close) { state.active = false }
         Task { [windows] in
             try? await Task.sleep(for: .milliseconds(220))
             for w in windows { w.orderOut(nil) }
         }
         // Select mode with nothing picked: give focus back to the app it started in.
-        if destination != nil, state.clips.isEmpty { previousApp?.activate() }
+        if destination != nil, state.clips.isEmpty, NSApp.isActive { previousApp?.activate() }
         let deliver = { [self] in onFinish(state.clips, state.depth) }
         if pendingContexts == 0 { deliver() } else {
             whenContextsRead = deliver
@@ -429,6 +452,7 @@ final class ClipState {
     /// The last probe, for the clip's context: the element behind each `chain` frame.
     @ObservationIgnored private(set) var probe = ProbeResult()
     @ObservationIgnored private var chainElements: [AXUIElement?] = []
+    @ObservationIgnored private var chainDOM: [DOMNode?] = []
     private var chainLabels: [String?] = []
     /// The chain index of the probe's preferred element, if any.
     private var preferred: Int?
@@ -436,14 +460,15 @@ final class ClipState {
     func setProbe(_ result: ProbeResult) {
         probe = result
         let labels = result.labels.count == result.frames.count ? result.labels : result.frames.map { _ in nil }
-        var unique: [(CGRect, AXUIElement?, String?)] = []
+        var unique: [(CGRect, AXUIElement?, String?, DOMNode?)] = []
         for (i, r) in result.frames.enumerated().reversed() where !unique.contains(where: { $0.0.isSame(as: r) }) {
-            unique.append((r, result.elements.indices.contains(i) ? result.elements[i] : nil, labels[i]))
+            unique.append((r, result.elements.indices.contains(i) ? result.elements[i] : nil, labels[i], result.dom(at: i)))
         }
         unique.reverse()
         chain = unique.map(\.0)
         chainElements = unique.map(\.1)
         chainLabels = unique.map(\.2)
+        chainDOM = unique.map(\.3)
         preferred = result.preferred.flatMap { p in
             result.frames.indices.contains(p) ? chain.firstIndex(where: { $0.isSame(as: result.frames[p]) }) : nil
         }
@@ -453,6 +478,12 @@ final class ClipState {
     func element(for rect: CGRect) -> AXUIElement? {
         guard let i = chain.firstIndex(where: { $0.isSame(as: rect) }) else { return nil }
         return chainElements[i]
+    }
+
+    /// The page element behind a highlighted frame, if the browser extension found it.
+    func dom(for rect: CGRect) -> DOMNode? {
+        guard let i = chain.firstIndex(where: { $0.isSame(as: rect) }) else { return nil }
+        return chainDOM[i]
     }
 
     /// The frozen screen a rect is mostly on.
@@ -579,6 +610,31 @@ struct ProbeResult: @unchecked Sendable {
     var labels: [String?] = []
     /// The index of the frame you most likely mean (see `ElementProbe.preferredIndex`).
     var preferred: Int?
+    /// The page element behind each frame, when the browser extension answered (else empty
+    /// or nil entries). Page elements come first, then the accessibility chain from the web
+    /// area up.
+    var dom: [DOMNode?] = []
+    /// The page's web area (its viewport) in global points, when the chain has one.
+    var webArea: CGRect = .null
+    /// The web area's element and the page URL, found while building the chain.
+    var webAreaElement: AXUIElement?
+
+    /// The page element behind a frame index, if any.
+    func dom(at i: Int) -> DOMNode? { dom.indices.contains(i) ? dom[i] : nil }
+
+    /// This chain with the page part replaced by `page`, which the extension found.
+    func merging(_ page: BrowserBridge.Chain) -> ProbeResult {
+        var r = self
+        // Keep the accessibility chain from the web area outwards; drop what was inside it.
+        let tail = frames.indices.filter { dom(at: $0) == nil && frames[$0].contains(webArea.insetBy(dx: 2, dy: 2)) }
+        let start = tail.first ?? frames.count
+        r.frames = page.frames + frames[start...]
+        r.elements = page.frames.map { _ in nil } + elements[start...]
+        r.labels = page.labels.map { Optional($0) } + (labels.count == frames.count ? Array(labels[start...]) : frames[start...].map { _ in nil })
+        r.dom = page.nodes.map { Optional($0) } + frames[start...].map { _ in nil }
+        r.preferred = page.preferred ?? 0
+        return r
+    }
 }
 
 /// Finds the UI element under a point and its ancestors' frames, off the main thread.
@@ -681,7 +737,7 @@ final class ElementProbe: @unchecked Sendable {
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(app, Float(p.x), Float(p.y), &hit) == .success,
               let element = hit else { return result }
-        return chain(from: element, pid: pid, windowID: windowID, window: window)
+        return withPage(chain(from: element, pid: pid, windowID: windowID, window: window), at: p)
     }
 
     /// The element and its ancestors up to the window, smallest first, with labels and the
@@ -691,8 +747,10 @@ final class ElementProbe: @unchecked Sendable {
         var frames: [CGRect] = []
         var elements: [AXUIElement?] = []
         var info: [ElementInfo] = []
+        var webArea: (AXUIElement, CGRect)?
         for _ in 0..<14 {
             let role = Self.string(element, kAXRoleAttribute)
+            if role == "AXWebArea", webArea == nil, let f = Self.frame(of: element) { webArea = (element, f) }
             if let f = Self.frame(of: element) {
                 let r = f.intersection(window)
                 if !r.isNull, r.width >= 16, r.height >= 12,
@@ -714,8 +772,34 @@ final class ElementProbe: @unchecked Sendable {
         if frames.last.map({ !$0.isSame(as: window) }) ?? true {
             frames.append(window); elements.append(nil); labels.append("Window")
         }
-        return ProbeResult(pid: pid, windowID: windowID, window: window, frames: frames, elements: elements,
-                           labels: labels, preferred: preferred)
+        var result = ProbeResult(pid: pid, windowID: windowID, window: window, frames: frames, elements: elements,
+                                 labels: labels, preferred: preferred)
+        if let (e, f) = webArea {
+            result.webAreaElement = e
+            result.webArea = f.intersection(window)
+        }
+        return result
+    }
+
+    /// Asks the browser extension for the page elements under `p`, when the chain is in a web
+    /// page and a browser is connected. Falls back to the accessibility chain.
+    private func withPage(_ result: ProbeResult, at p: CGPoint) -> ProbeResult {
+        guard let area = result.webAreaElement, !result.webArea.isNull, result.webArea.contains(p),
+              BrowserBridge.shared.isConnected,
+              let url = PickReader.urlValue(area, kAXURLAttribute),
+              let page = BrowserBridge.shared.hit(at: p, area: result.webArea, window: result.window, url: url)
+        else { return result }
+        return result.merging(page)
+    }
+
+    /// The previous (−1) or next (+1) sibling of a page element, with the rest of `base`'s
+    /// chain from the web area out.
+    func domSibling(of node: DOMNode, direction: Int, base: ProbeResult, _ done: @escaping @MainActor (ProbeResult?) -> Void) {
+        queue.async {
+            let page = BrowserBridge.shared.sibling(of: node, direction: direction, area: base.webArea)
+            let result = page.map { base.merging($0) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
+        }
     }
 
     struct ElementInfo {
@@ -795,12 +879,15 @@ final class ElementProbe: @unchecked Sendable {
                            window: window, frames: [padded, window], elements: [e, nil], labels: ["Selected text", "Window"])
     }
 
-    /// The front-most normal window of another app under the point.
+    /// The front-most normal window of another app under the point. Windows of background-only
+    /// apps are skipped: they are click-through overlays (such as an agent's cursor layer),
+    /// never something you work in.
     private func windowAt(_ p: CGPoint) -> (pid_t, CGWindowID?, CGRect)? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
         for w in list {
             guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != me,
+                  NSRunningApplication(processIdentifier: pid)?.activationPolicy != .prohibited,
                   (w[kCGWindowLayer as String] as? Int) == 0,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let r = CGRect(dictionaryRepresentation: b as CFDictionary), r.contains(p) else { continue }
