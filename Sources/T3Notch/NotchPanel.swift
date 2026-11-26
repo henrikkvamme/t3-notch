@@ -95,6 +95,8 @@ final class PanelController {
     var onboardingTask: Task<Void, Never>?
     /// The Hotkey step: the shortcut has folded the island once.
     var onboardingHidOnce = false
+    /// How many successes the tour has had; each plays the next note up.
+    var onboardingNote = 0
 
     init(store: Store) {
         self.store = store
@@ -499,8 +501,10 @@ final class PanelController {
     /// A tap of ⌃⌥ from any app: select what is under the pointer without opening the island
     /// first. Picks go to the focused chat and open the island; Esc with no picks leaves
     /// everything as it was.
-    func startSelecting() {
-        guard clipper == nil, ui.mode != .expanded else { return }
+    func startSelecting(inTour: Bool = false) {
+        // The tour's Select step takes the tap, and starts select mode itself (`inTour`).
+        if ui.onboarding == .select, !inTour { onboardingSelectTapped(); return }
+        guard clipper == nil, inTour || ui.mode != .expanded else { return }
         guard Permission.screenRecording.isGranted, Permission.accessibility.isGranted else {
             expand()
             showMissingPermissions()
@@ -521,6 +525,11 @@ final class PanelController {
             guard let self else { return }
             self.clipper = nil
             self.ui.clipDepth = depth
+            if inTour {
+                self.ui.clips += clips
+                self.onboardingSelectEnded()
+                return
+            }
             if clips.isEmpty {
                 if wasPeeking { self.peek(autoHide: true) }
                 return

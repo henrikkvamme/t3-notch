@@ -4,13 +4,24 @@ import ServiceManagement
 import SwiftUI
 
 /// The welcome tour. It runs inside the island on first launch and teaches by doing: connect to
-/// T3, press the island's shortcut, open the chat list, then a card with the other keys.
+/// T3, press the island's shortcut, open the chat list, select something on screen, then a card
+/// with the other keys.
 enum OnboardingStep: Int, CaseIterable {
-    case welcome, connect, hotkey, chats, tips, done
+    // The raw value is saved to resume the tour, so a new step goes last here.
+    case welcome, connect, hotkey, chats, tips, done, select
 
-    /// Steps 3 to 5 teach keys; Esc skips them. Welcome and Connect cannot be skipped, since
-    /// the island does nothing until it reaches T3.
-    var skippable: Bool { self == .hotkey || self == .chats || self == .tips }
+    /// The steps in the order the tour shows them, one progress dot each.
+    static let tour: [OnboardingStep] = [.welcome, .connect, .hotkey, .chats, .select, .tips]
+
+    /// The step after this one.
+    var next: OnboardingStep {
+        guard let i = Self.tour.firstIndex(of: self), i + 1 < Self.tour.count else { return .done }
+        return Self.tour[i + 1]
+    }
+
+    /// The key steps; Esc skips them. Welcome and Connect cannot be skipped, since the island
+    /// does nothing until it reaches T3.
+    var skippable: Bool { self != .welcome && self != .connect && self != .done }
 }
 
 enum Onboarding {
@@ -57,6 +68,10 @@ enum Onboarding {
     }
     static let t3Download = URL(string: "https://github.com/pingdotgg/t3code/releases/latest")!
 
+    /// Whether select mode can run now. Without its permissions the Select step still takes
+    /// the tap; select mode asks for them when it is first used.
+    static var canSelect: Bool { Permission.screenRecording.isGranted && Permission.accessibility.isGranted }
+
     static func openT3() {
         guard let url = t3AppURL else { NSWorkspace.shared.open(t3Download); return }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
@@ -91,6 +106,7 @@ extension PanelController {
     func startOnboarding(at step: OnboardingStep = .welcome) {
         Onboarding.begin()
         onboardingHidOnce = false
+        onboardingNote = 0
         ui.onboardingKeysLit = false
         ui.onboarding = step
         expand()
@@ -99,6 +115,8 @@ extension PanelController {
 
     /// Moves to `step`, saves it so a relaunch resumes there, and starts what the step waits for.
     func go(to step: OnboardingStep) {
+        // The tap is off (its setting, VoiceOver, a password field): nothing to teach.
+        if step == .select, !SelectTrigger.enabled { go(to: step.next); return }
         Onboarding.save(step)
         onboardingTask?.cancel()
         withAnimation(Motion.content) {
@@ -116,11 +134,18 @@ extension PanelController {
         case .connect:
             // The store finds and connects to T3 by itself; move on once it has.
             onboardingTask = Task { [weak self] in
+                // Show the list first, also when T3 is connected already.
+                try? await Task.sleep(for: .milliseconds(700))
                 while !Task.isCancelled {
                     if self?.store.connection == .connected {
-                        try? await Task.sleep(for: .seconds(1.1))
+                        // Let the last check mark draw, then mark the success.
+                        try? await Task.sleep(for: .milliseconds(450))
+                        guard let self, !Task.isCancelled else { return }
+                        // Folded away, it moves on without a sound.
+                        if self.ui.mode != .hidden { self.celebrate() }
+                        try? await Task.sleep(for: .seconds(1.2))
                         guard !Task.isCancelled else { return }
-                        self?.go(to: .hotkey)
+                        self.go(to: OnboardingStep.connect.next)
                         return
                     }
                     try? await Task.sleep(for: .milliseconds(400))
@@ -128,13 +153,16 @@ extension PanelController {
             }
         case .hotkey:
             onboardingHidOnce = false
-        case .chats, .tips:
+        case .chats, .select, .tips:
             break
         case .done:
-            celebrate(big: true)
             onboardingTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1.8))
+                // The step settles first, so the check mark, the wave and the sound land together.
+                try? await Task.sleep(for: .milliseconds(450))
                 guard let self, !Task.isCancelled else { return }
+                self.celebrate(big: true)
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
                 self.hide()
                 try? await Task.sleep(for: .milliseconds(500))
                 guard !Task.isCancelled else { return }
@@ -143,17 +171,21 @@ extension PanelController {
         }
     }
 
-    /// A step's success: the keycaps light green with a pulse, a soft sound, and a tap on the
-    /// trackpad when a finger is on it.
+    /// A step's success, as one moment: the keys bottom out and spring back, a wave of light
+    /// runs out from them, the island breathes, and a note and a trackpad tap land with it.
     func celebrate(big: Bool = false) {
-        withAnimation(Motion.snappy) {
-            ui.onboardingKeysLit = true
-            ui.onboardingSuccess += 1
-        }
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-        if let sound = NSSound(named: big ? "Glass" : "Pop") {
-            sound.volume = big ? 0.35 : 0.5
-            sound.play()
+        withAnimation(Motion.snappy) { ui.onboardingKeysLit = true }
+        ui.onboardingSuccess += 1
+        playSuccessNote(resolve: big)
+    }
+
+    /// The tour's sound: each success plays the next note up, and the end resolves them.
+    /// The tap lands when the keys reach the bottom.
+    private func playSuccessNote(resolve: Bool = false) {
+        if resolve { Chime.resolve() } else { Chime.note(onboardingNote) }
+        onboardingNote += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + Keycap.bottomOut) {
+            NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
         }
     }
 
@@ -174,9 +206,9 @@ extension PanelController {
             try? await Task.sleep(for: .milliseconds(380))
             guard let self, !Task.isCancelled else { return }
             self.celebrate()
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(1.6))
             guard !Task.isCancelled else { return }
-            self.go(to: .chats)
+            self.go(to: OnboardingStep.hotkey.next)
         }
     }
 
@@ -186,10 +218,32 @@ extension PanelController {
         celebrate()
         onboardingTask?.cancel()
         onboardingTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(650))
+            // The wave runs out first.
+            try? await Task.sleep(for: .milliseconds(850))
             guard let self, !Task.isCancelled, self.ui.onboarding == .chats else { return }
             self.setPicker(true)
         }
+    }
+
+    /// The Select step: the tap lights its keys, then starts the real select mode.
+    func onboardingSelectTapped() {
+        guard !ui.onboardingKeysLit else { return }
+        celebrate()
+        let real = Onboarding.canSelect
+        onboardingTask?.cancel()
+        onboardingTask = Task { [weak self] in
+            // The wave runs out first. With nothing to try, the words get time to be read.
+            try? await Task.sleep(for: .milliseconds(real ? 850 : 1800))
+            guard let self, !Task.isCancelled, self.ui.onboarding == .select else { return }
+            if real { self.startSelecting(inTour: true) } else { self.go(to: OnboardingStep.select.next) }
+        }
+    }
+
+    /// Select mode ended during the Select step, with or without picks.
+    func onboardingSelectEnded() {
+        guard ui.onboarding == .select else { return }
+        expand()
+        go(to: OnboardingStep.select.next)
     }
 
     /// One of the keys card's shortcuts was pressed. It ticks off instead of acting, and the
@@ -197,8 +251,7 @@ extension PanelController {
     func triedTip(_ tip: OnboardingTip) {
         guard ui.onboarding == .tips, !ui.onboardingTried.contains(tip) else { return }
         withAnimation(Motion.snappy) { _ = ui.onboardingTried.insert(tip) }
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-        if let sound = NSSound(named: "Pop") { sound.volume = 0.5; sound.play() }
+        playSuccessNote()
         guard ui.onboardingTried.count == OnboardingTip.allCases.count else { return }
         onboardingTask?.cancel()
         onboardingTask = Task { [weak self] in
@@ -251,7 +304,7 @@ extension PanelController {
     /// The chat list closed during the Chats step.
     func onboardingPickerClosed() {
         guard ui.onboarding == .chats else { return }
-        go(to: .tips)
+        go(to: OnboardingStep.chats.next)
     }
 }
 
@@ -263,11 +316,21 @@ struct OnboardingView: View {
     let ui: OverlayUIState
     let step: OnboardingStep
     var onAction: (OnboardingStep) -> Void
+    /// Where the success wave starts, in the tour's space: the last key pressed, or the final
+    /// check mark.
+    @State private var waveOrigin = CGPoint(x: 340, y: 80)
+
+    static let space = "tour"
+
+    /// From the tour's content out to the island's edge (see `content` in OverlayView).
+    private var bleed: EdgeInsets {
+        EdgeInsets(top: max(ui.notchSize.height - 6, 0) + 10, leading: 16, bottom: 14, trailing: 16)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                stepContent.id(step).transition(.blurReplace.combined(with: .scale(0.97)))
+                stepContent.id(step).transition(StepChange())
             }
             .frame(maxWidth: .infinity)
             if step != .done {
@@ -276,6 +339,11 @@ struct OnboardingView: View {
         }
         .padding(.top, 8)
         .padding(.horizontal, 8)
+        // The wave's layer covers the whole island, so the light ends at the island's edge.
+        .padding(bleed)
+        .background(LightWave(origin: waveOrigin, trigger: ui.onboardingSuccess, strength: step == .done ? 0.13 : 0.09))
+        .coordinateSpace(.named(Self.space))
+        .padding(EdgeInsets(top: -bleed.top, leading: -bleed.leading, bottom: -bleed.bottom, trailing: -bleed.trailing))
     }
 
     @ViewBuilder private var stepContent: some View {
@@ -284,6 +352,7 @@ struct OnboardingView: View {
         case .connect: connect
         case .hotkey: hotkey
         case .chats: chats
+        case .select: select
         case .tips: tips
         case .done: done
         }
@@ -296,7 +365,7 @@ struct OnboardingView: View {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 72, height: 72)
                 .shadow(color: .white.opacity(0.18), radius: 18)
             title("Your T3 chats, in the notch.")
-            caption("Ask, follow and answer your agents without leaving what you are doing.")
+            caption("Ask, follow and answer your agents from any app.")
         }
         .padding(.top, 6)
     }
@@ -330,37 +399,35 @@ struct OnboardingView: View {
 
     private var connectedTitle: String {
         if let failure { return "Can't connect: \(failure)" }
-        return "Connected, with its own access token"
+        return store.connection == .connected ? "Connected" : "Connect"
     }
 
     private var hotkey: some View {
         let lit = ui.onboardingKeysLit
-        return VStack(spacing: 18) {
-            keys(Settings.showIslandKey)
-            VStack(spacing: 6) {
-                title(lit ? "That's the one to remember" : "Press \(Settings.showIslandKey.label)", done: lit)
-                caption(lit ? "It opens the island from any app."
-                        : "Press it to fold the island away, then again to bring it back.")
-            }
-        }
+        return keyStep(Settings.showIslandKey.keycaps,
+                       title: lit ? "That's the one to remember" : "Hide the island, then bring it back",
+                       caption: lit ? "It works from any app." : "Press the keys, then press them again.")
     }
 
     private var chats: some View {
+        keyStep(Settings.showChatsKey.keycaps,
+                title: ui.onboardingKeysLit ? "Your chats" : "Open your chats",
+                caption: "Pick one. Its replies show up here.")
+    }
+
+    private var select: some View {
         let lit = ui.onboardingKeysLit
-        return VStack(spacing: 18) {
-            keys(Settings.showChatsKey)
-            VStack(spacing: 6) {
-                title(lit ? "Your chats" : "Press \(Settings.showChatsKey.label) to see your chats", done: lit)
-                caption("Pick one, and its replies show up here as they come in.")
-            }
-        }
+        return keyStep(SelectTrigger.keycaps,
+                       title: lit ? (Onboarding.canSelect ? "Now pick something" : "That starts select mode")
+                                  : "Select anything on screen",
+                       caption: lit ? "What you pick goes into your message." : "Tap both keys at once, in any app.")
     }
 
     private var tips: some View {
         VStack(spacing: 16) {
             VStack(spacing: 6) {
-                title("Try a few more keys")
-                caption("Press each one to try it.")
+                title("A few more keys")
+                caption("Try each one.")
             }
             VStack(spacing: 0) {
                 ForEach(OnboardingTip.allCases, id: \.self) { tip in
@@ -385,32 +452,52 @@ struct OnboardingView: View {
     }
 
     private var done: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundStyle(.green)
-                .symbolEffect(.bounce, value: ui.onboardingSuccess)
-                .background(SuccessPulse(trigger: ui.onboardingSuccess, shape: Circle(), scale: 2.2))
+        catchesLight(VStack(spacing: 12) {
+            CheckMark(on: ui.onboardingKeysLit, size: 48)
+                .waveOrigin($waveOrigin)
             title("All set")
             caption("Right-click the dot by the notch for settings.")
         }
-        .padding(.bottom, 4)
+        .padding(.top, 4).padding(.bottom, 6))
     }
 
-    /// Big keycaps that go down while held and light green with a pulse on success.
-    private func keys(_ binding: KeyBinding) -> some View {
-        KeycapRow(binding: binding, lit: ui.onboardingKeysLit, held: ui.onboardingHeld)
-            .background(SuccessPulse(trigger: ui.onboardingSuccess,
-                                     shape: RoundedRectangle(cornerRadius: 20, style: .continuous), scale: 1.25))
+    /// A step that teaches one shortcut: big keycaps that go down while held, and on success
+    /// bottom out, spring back and light up. The wave starts at the last key.
+    func keyStep(_ caps: [KeyCap], title text: String, caption note: String) -> some View {
+        catchesLight(VStack(spacing: 18) {
+            KeycapRow(caps: caps, lit: ui.onboardingKeysLit, held: ui.onboardingHeld,
+                      click: ui.onboardingSuccess, origin: $waveOrigin)
+            VStack(spacing: 6) {
+                title(text, done: ui.onboardingKeysLit)
+                caption(note)
+            }
+        })
+    }
+
+    /// The success wave lights what it passes: the keys and the words catch it as a sheen.
+    /// Only for steps drawn by SwiftUI alone, since it flattens them into one layer.
+    private func catchesLight(_ content: some View) -> some View {
+        content
+            .frame(maxWidth: .infinity)
+            .overlay {
+                GeometryReader { proxy in
+                    let frame = proxy.frame(in: .named(Self.space))
+                    LightWave(origin: CGPoint(x: waveOrigin.x - frame.minX, y: waveOrigin.y - frame.minY),
+                              trigger: ui.onboardingSuccess, strength: 0.5)
+                        .blendMode(.sourceAtop)
+                }
+            }
+            .compositingGroup()
     }
 
     // MARK: Pieces
 
-    /// Progress dots for the five steps, and how to skip.
+    /// One progress dot per step, and how to skip. The current dot turns green on success.
     private var footer: some View {
         ZStack {
             HStack(spacing: 6) {
-                ForEach(OnboardingStep.allCases.filter { $0 != .done }, id: \.self) { s in
-                    Capsule().fill(s == step ? Color.white : Color.white.opacity(s.rawValue < step.rawValue ? 0.45 : 0.18))
-                        .frame(width: s == step ? 18 : 6, height: 6)
+                ForEach(OnboardingStep.tour, id: \.self) { s in
+                    Capsule().fill(dotColor(s)).frame(width: s == step ? 18 : 6, height: 6)
                 }
             }
             .animation(Motion.snappy, value: step)
@@ -422,21 +509,33 @@ struct OnboardingView: View {
         }
     }
 
+    private func dotColor(_ s: OnboardingStep) -> Color {
+        let tour = OnboardingStep.tour
+        if s == step { return ui.onboardingKeysLit ? .green : .white }
+        let passed = (tour.firstIndex(of: s) ?? 0) < (tour.firstIndex(of: step) ?? 0)
+        return .white.opacity(passed ? 0.45 : 0.18)
+    }
+
     private func title(_ text: String, done: Bool = false) -> some View {
         HStack(spacing: 8) {
             if done {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    .transition(.scale(0.4).combined(with: .opacity))
+                DrawnCheck(size: 20).transition(.scale(0.4).combined(with: .opacity))
             }
-            Text(text).contentTransition(.opacity)
+            ZStack {
+                Text(text).id(text).transition(.blurReplace)
+            }
         }
         .font(.system(size: 20, weight: .semibold)).multilineTextAlignment(.center)
+        .animation(Motion.content, value: text)
         .animation(Motion.open, value: done)
     }
 
     private func caption(_ text: String) -> some View {
-        Text(text).font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            .contentTransition(.opacity)
+        ZStack {
+            Text(text).id(text).transition(.blurReplace)
+        }
+        .font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        .animation(Motion.content, value: text)
     }
 
     private var divider: some View { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
@@ -446,17 +545,19 @@ struct OnboardingView: View {
     private func checkRow(_ text: String, state: CheckState, action: (String, () -> Void)?) -> some View {
         HStack(spacing: 10) {
             ZStack {
+                CheckMark(on: state == .ok, size: 16)
                 switch state {
-                case .ok: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                case .waiting: ProgressView().controlSize(.small).scaleEffect(0.8)
-                case .missing: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
-                case .idle: Image(systemName: "circle").foregroundStyle(.tertiary)
+                case .ok: EmptyView()
+                case .waiting: ProgressView().controlSize(.small).scaleEffect(0.8).transition(.blurReplace)
+                case .missing:
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange).transition(.blurReplace)
+                case .idle: Image(systemName: "circle").foregroundStyle(.tertiary).transition(.blurReplace)
                 }
             }
             .font(.system(size: 16))
             .frame(width: 20, height: 20)
-            .transition(.blurReplace)
             Text(text).font(.system(size: 13)).foregroundStyle(state == .idle ? .secondary : .primary).lineLimit(2)
+                .contentTransition(.opacity)
             Spacer(minLength: 8)
             if let action {
                 Button(action: action.1) {
@@ -477,15 +578,12 @@ struct OnboardingView: View {
     private func tipRow(_ tip: OnboardingTip) -> some View {
         let tried = ui.onboardingTried.contains(tip)
         return HStack(spacing: 12) {
-            KeycapRow(binding: tip.binding, lit: tried, held: tried ? [] : ui.onboardingHeld, size: 26)
+            KeycapRow(caps: tip.binding.keycaps, lit: tried, held: tried ? [] : ui.onboardingHeld, size: 26,
+                      click: tried ? 1 : 0)
                 .frame(width: 128, alignment: .leading)
             Text(tip.text).font(.system(size: 13)).foregroundStyle(tried ? .secondary : .primary)
             Spacer(minLength: 0)
-            Image(systemName: tried ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 16))
-                .foregroundStyle(tried ? AnyShapeStyle(.green) : AnyShapeStyle(.quaternary))
-                .contentTransition(.symbolEffect(.replace))
-                .symbolEffect(.bounce, value: tried)
+            CheckMark(on: tried, size: 16, ring: true)
         }
         .padding(.vertical, 8)
     }
@@ -510,102 +608,314 @@ private struct LoginRow: View {
     }
 }
 
+// MARK: - Keycaps
+
+/// One key of a shortcut: its symbol, and its name for big keycaps.
+struct KeyCap: Hashable {
+    let symbol: String
+    var name: String?
+}
+
 /// A shortcut drawn as keyboard keys.
 struct KeycapRow: View {
-    let binding: KeyBinding
+    let caps: [KeyCap]
     var lit: Bool
     /// Keys held down now, by symbol; those keycaps go down.
     var held: Set<String> = []
     var size: CGFloat = 60
+    /// Changes once per success; the keys bottom out and spring back.
+    var click = 0
+    /// Gets the centre of the last key, where the success wave starts.
+    var origin: Binding<CGPoint>?
 
     var body: some View {
         HStack(spacing: size * 0.16) {
-            ForEach(Array(binding.keycaps.enumerated()), id: \.offset) { i, cap in
-                Keycap(symbol: cap.symbol, name: size >= 40 ? cap.name : nil,
-                       wide: cap.symbol == "Space", lit: lit, pressed: held.contains(cap.symbol), size: size)
-                    .animation(Motion.snappy.delay(lit ? Double(i) * 0.07 : 0), value: lit)
+            ForEach(Array(caps.enumerated()), id: \.offset) { i, cap in
+                Keycap(cap: cap, lit: lit, pressed: held.contains(cap.symbol), size: size, click: click)
+                    .waveOrigin(i == caps.count - 1 ? origin : nil)
             }
         }
     }
 }
 
-/// One key: a dark cap with a lit top edge. It goes down while pressed, and on success it
-/// lights green and pops.
+/// One key: a dark glass cap with a lit top edge, on a darker side. It goes down while pressed.
+/// On success it bottoms out, springs back past its rest, and lights green.
 struct Keycap: View {
-    let symbol: String
-    var name: String?
-    var wide = false
+    let cap: KeyCap
     var lit = false
     var pressed = false
     var size: CGFloat = 60
+    var click = 0
 
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: size * 0.22, style: .continuous) }
-    private var depth: CGFloat { max(2, size * 0.06) }
-    private var down: Bool { pressed || lit }
+    /// How long the key takes to reach the bottom; the sound and the trackpad tap land then.
+    static let bottomOut = 0.07
+
+    private struct Pose {
+        /// 1 at the bottom, 0 at rest, below 0 past rest on the way back.
+        var travel = 0.0
+        /// The light the key gives off at the click.
+        var flash = 0.0
+    }
+
+    private var wide: Bool { cap.symbol == "Space" }
+    private var name: String? { size >= 40 ? cap.name : nil }
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: size * 0.24, style: .continuous) }
+    private var depth: CGFloat { max(2, size * 0.085) }
 
     var body: some View {
         VStack(spacing: size * 0.04) {
             // A big space bar has its name under it; a small one only fits the name.
-            Text(symbol == "Space" ? (name == nil ? "space" : "") : symbol)
-                .font(.system(size: max(10, size * (symbol.count > 1 ? 0.26 : 0.38)), weight: .medium, design: .rounded))
+            Text(wide ? (name == nil ? "space" : "") : cap.symbol)
+                .font(.system(size: max(10, size * (cap.symbol.count > 1 ? 0.26 : 0.38)), weight: .medium, design: .rounded))
             if let name {
-                Text(name).font(.system(size: size * 0.15, weight: .medium)).foregroundStyle(.secondary)
+                Text(name).font(.system(size: size * 0.15, weight: .medium)).opacity(0.6)
             }
         }
         .foregroundStyle(lit ? Color.green : .primary)
         .frame(width: wide ? size * (name == nil ? 2.2 : 2.8) : size, height: size)
-        .background {
-            shape.fill(lit ? Color.green.opacity(0.22) : pressed ? Color(white: 0.24) : Color(white: 0.17))
-                .overlay(shape.fill(LinearGradient(colors: [.white.opacity(0.10), .clear], startPoint: .top, endPoint: .center)))
-                .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(lit ? 0.35 : 0.22), .white.opacity(0.03)],
-                                                           startPoint: .top, endPoint: .bottom), lineWidth: 1))
-        }
-        // The key's side, under it; it shortens as the key goes down.
-        .background(shape.fill(Color(white: 0.06)).offset(y: down ? depth * 0.3 : depth))
-        .offset(y: down ? depth * 0.7 : 0)
-        .shadow(color: lit ? .green.opacity(0.45) : .black.opacity(0.5), radius: lit ? 14 : 5, y: lit ? 0 : 3)
-        // On success: a quick pop up, then settle.
-        .keyframeAnimator(initialValue: 1.0, trigger: lit) { view, scale in
-            view.scaleEffect(scale)
+        .keyframeAnimator(initialValue: Pose(), trigger: click) { label, pose in
+            // A held key rests partway down; the click takes it the rest of the way.
+            let held = pressed ? 0.55 : 0.0
+            let y = depth * (held + (pose.travel >= 0 ? pose.travel * (1 - held) : pose.travel * 0.6))
+            label
+                .background { Self.face(shape, lit: lit, flash: pose.flash, down: max(held, pose.travel)) }
+                .scaleEffect(1 - 0.03 * max(0, pose.travel))
+                // The key's side, under it. Its foot stays put while the cap moves.
+                .background(shape.fill(Color(white: 0.055)).offset(y: depth - y))
+                .offset(y: y)
+                .shadow(color: lit ? .green.opacity(0.28 + 0.4 * pose.flash) : .black.opacity(0.5),
+                        radius: lit ? 12 + 8 * pose.flash : 5, y: lit ? 0 : 3)
         } keyframes: { _ in
-            if lit {
-                SpringKeyframe(1.12, duration: 0.14, spring: .snappy)
-                SpringKeyframe(1.0, duration: 0.4, spring: .bouncy)
-            } else {
-                LinearKeyframe(1.0, duration: 0.01)
+            KeyframeTrack(\.travel) {
+                CubicKeyframe(1, duration: Self.bottomOut)
+                SpringKeyframe(0, duration: 0.55, spring: Spring(response: 0.28, dampingRatio: 0.42))
+            }
+            KeyframeTrack(\.flash) {
+                LinearKeyframe(1, duration: Self.bottomOut)
+                LinearKeyframe(0, duration: 0.6, timingCurve: .easeOut)
             }
         }
     }
-}
 
-/// A green outline that grows out from behind a view and fades, once per `trigger` change.
-struct SuccessPulse<S: Shape>: View {
-    let trigger: Int
-    let shape: S
-    var scale: CGFloat = 1.25
-
-    var body: some View {
-        shape.stroke(Color.green, lineWidth: 2)
-            .keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, t in
-                // At rest (t = 1) and before the first success it is invisible.
-                view.scaleEffect(1 + (scale - 1) * t).opacity(t < 1 ? 0.8 * (1 - t) : 0)
-            } keyframes: { _ in
-                LinearKeyframe(0.0, duration: 0.01)
-                CubicKeyframe(1.0, duration: 0.7)
-            }
-            .allowsHitTesting(false)
+    private nonisolated static func face(_ shape: RoundedRectangle, lit: Bool, flash: Double, down: Double) -> some View {
+        let top = 0.21 - 0.05 * min(1, max(0, down))
+        return shape.fill(LinearGradient(colors: [Color(white: top), Color(white: top - 0.07)], startPoint: .top, endPoint: .bottom))
+            .overlay(shape.fill(Color.green.opacity(lit ? 0.2 : 0)))
+            .overlay(shape.fill(LinearGradient(colors: [.white.opacity(0.10), .clear], startPoint: .top, endPoint: .center)))
+            .overlay(shape.fill(Color.white.opacity(0.32 * flash)))
+            .overlay(shape.strokeBorder(LinearGradient(colors: lit ? [.green.opacity(0.75), .green.opacity(0.12)]
+                                                                   : [.white.opacity(0.26), .white.opacity(0.03)],
+                                                       startPoint: .top, endPoint: .bottom), lineWidth: 1))
     }
 }
 
 extension KeyBinding {
     /// The keys one by one, in ⌃⌥⇧⌘ order, each with its name for big keycaps.
-    var keycaps: [(symbol: String, name: String?)] {
-        var caps: [(String, String?)] = []
-        if modifiers & UInt32(controlKey) != 0 { caps.append(("⌃", "control")) }
-        if modifiers & UInt32(optionKey) != 0 { caps.append(("⌥", "option")) }
-        if modifiers & UInt32(shiftKey) != 0 { caps.append(("⇧", "shift")) }
-        if modifiers & UInt32(cmdKey) != 0 { caps.append(("⌘", "command")) }
-        caps.append((key, key == "Space" ? "space" : nil))
+    var keycaps: [KeyCap] {
+        var caps: [KeyCap] = []
+        if modifiers & UInt32(controlKey) != 0 { caps.append(KeyCap(symbol: "⌃", name: "control")) }
+        if modifiers & UInt32(optionKey) != 0 { caps.append(KeyCap(symbol: "⌥", name: "option")) }
+        if modifiers & UInt32(shiftKey) != 0 { caps.append(KeyCap(symbol: "⇧", name: "shift")) }
+        if modifiers & UInt32(cmdKey) != 0 { caps.append(KeyCap(symbol: "⌘", name: "command")) }
+        caps.append(KeyCap(symbol: key, name: key == "Space" ? "space" : nil))
         return caps
+    }
+}
+
+// MARK: - The success moment
+
+/// Light that spreads out from `origin` and fades, once per `trigger` change. Off with
+/// Reduce Motion, as is the island's stretch.
+struct LightWave: View {
+    var origin: CGPoint
+    var trigger: Int
+    var strength = 1.0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Far enough to pass the island's corners from anywhere inside it.
+    private static let reach: CGFloat = 560
+    private static let duration = 0.9
+
+    /// The light's brightness from the centre (0) to the front (1): a bloom that fills the
+    /// circle, with a soft, slightly brighter front. No dark middle and no hard edge, so it
+    /// reads as light that spreads, not as a ring.
+    private static let stops: [Gradient.Stop] = (0...20).map { i in
+        let x = Double(i) / 20
+        let bloom = 0.55 * pow(1 - x, 0.8)
+        let front = 0.62 * exp(-pow((x - 0.74) / 0.15, 2))
+        return Gradient.Stop(color: .white.opacity(i == 20 ? 0 : min(1, bloom + front)), location: x)
+    }
+
+    var body: some View {
+        Circle()
+            .fill(RadialGradient(stops: Self.stops, center: .center, startRadius: 0, endRadius: Self.reach))
+            .frame(width: Self.reach * 2, height: Self.reach * 2)
+            // At rest (t = 1) and before the first success it is invisible.
+            .keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, t in
+                view.scaleEffect(0.03 + 0.97 * t).opacity(t < 1 && !reduceMotion ? strength * pow(1 - t, 1.4) : 0)
+            } keyframes: { _ in
+                MoveKeyframe(0.0)
+                LinearKeyframe(1.0, duration: Self.duration, timingCurve: .easeOut)
+            }
+            .position(origin)
+            .allowsHitTesting(false)
+    }
+}
+
+/// The island takes the hit: it stretches a little from the notch and springs back, once per
+/// `trigger` change.
+struct IslandBreath: ViewModifier {
+    var trigger: Int
+    var big = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, breath in
+            let amount = reduceMotion ? 0 : breath
+            view.scaleEffect(x: 1 + 0.006 * amount, y: 1 + 0.022 * amount, anchor: .top)
+        } keyframes: { _ in
+            // It starts as the keys reach the bottom.
+            LinearKeyframe(0.0, duration: Keycap.bottomOut)
+            SpringKeyframe(big ? 1.6 : 1.0, duration: 0.13, spring: .snappy)
+            SpringKeyframe(0.0, duration: 0.7, spring: Spring(response: 0.36, dampingRatio: 0.48))
+        }
+    }
+}
+
+/// A check mark that draws itself: the disc pops in, then the stroke runs. It undraws the
+/// same way.
+struct CheckMark: View {
+    var on: Bool
+    var size: CGFloat = 16
+    /// Shows an empty ring while off.
+    var ring = false
+
+    var body: some View {
+        ZStack {
+            if ring {
+                Circle().strokeBorder(.quaternary, lineWidth: 1.5).opacity(on ? 0 : 1)
+            }
+            Circle().fill(Color.green)
+                .scaleEffect(on ? 1 : 0.4).opacity(on ? 1 : 0)
+                .shadow(color: .green.opacity(on && size >= 40 ? 0.4 : 0), radius: size * 0.3)
+                .animation(on ? .bouncy(duration: 0.42, extraBounce: 0.12) : Motion.close, value: on)
+            CheckShape().trim(from: 0, to: on ? 1 : 0)
+                .stroke(Color.black.opacity(0.88), style: StrokeStyle(lineWidth: size * 0.115, lineCap: .round, lineJoin: .round))
+                .animation(on ? .easeOut(duration: 0.26).delay(0.14) : .easeIn(duration: 0.1), value: on)
+        }
+        .frame(width: size, height: size)
+        .animation(Motion.snappy, value: on)
+    }
+}
+
+/// A check mark that draws itself when it appears.
+struct DrawnCheck: View {
+    var size: CGFloat = 16
+    @State private var on = false
+
+    var body: some View {
+        CheckMark(on: on, size: size).onAppear { on = true }
+    }
+}
+
+private struct CheckShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + rect.width * 0.28, y: rect.minY + rect.height * 0.53))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.44, y: rect.minY + rect.height * 0.68))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.73, y: rect.minY + rect.height * 0.35))
+        return path
+    }
+}
+
+/// One step leaves to the left as the next comes in from the right.
+struct StepChange: Transition {
+    var distance: CGFloat = 20
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .offset(x: phase == .willAppear ? distance : phase == .didDisappear ? -distance : 0)
+            .opacity(phase.isIdentity ? 1 : 0)
+            .blur(radius: phase.isIdentity ? 0 : 8)
+    }
+}
+
+extension View {
+    /// Reports this view's centre in the tour's space to `origin`.
+    func waveOrigin(_ origin: Binding<CGPoint>?) -> some View {
+        onGeometryChange(for: CGPoint.self, of: { proxy in
+            let frame = proxy.frame(in: .named(OnboardingView.space))
+            return CGPoint(x: frame.midX, y: frame.midY)
+        }) { centre in
+            origin?.wrappedValue = centre
+        }
+    }
+}
+
+// MARK: - Sound
+
+/// The tour's sounds, made here so each lands on its moment: a soft mallet note per success,
+/// one step higher each time, and a chord that resolves them at the end.
+@MainActor
+enum Chime {
+    private static var sounds: [String: NSSound] = [:]
+    /// D5, then up a major pentatonic scale.
+    private static let base = 587.33
+    private static let scale = [0, 2, 4, 7, 9]
+
+    private static func frequency(_ step: Int) -> Double {
+        let semitones = scale[step % scale.count] + 12 * (step / scale.count)
+        return base * pow(2, Double(min(semitones, 24)) / 12)
+    }
+
+    /// The `index`th note of the tour.
+    static func note(_ index: Int) {
+        play("note \(index)", volume: 0.34) {
+            wave([(frequency(index), 0)], decay: 0.11, length: 0.55)
+        }
+    }
+
+    /// The end of the tour: a rising D major chord.
+    static func resolve() {
+        play("resolve", volume: 0.3) {
+            wave([(base, 0), (base * 1.5, 0.055), (base * 2, 0.11), (base * 2.52, 0.165)], decay: 0.42, length: 1.9)
+        }
+    }
+
+    private static func play(_ key: String, volume: Float, make: () -> Data) {
+        let sound = sounds[key] ?? NSSound(data: make())
+        sounds[key] = sound
+        sound?.stop()
+        sound?.volume = volume
+        sound?.play()
+    }
+
+    /// A WAV file of mallet tones: each a sine with a short-lived octave above it, a 4 ms
+    /// attack and an exponential decay.
+    static func wave(_ tones: [(frequency: Double, start: Double)], decay: Double, length: Double) -> Data {
+        let rate = 44_100.0
+        let count = Int(length * rate)
+        var samples = [Double](repeating: 0, count: count)
+        for tone in tones {
+            let first = Int(tone.start * rate)
+            for i in first..<count {
+                let t = Double(i - first) / rate
+                let body = sin(2 * .pi * tone.frequency * t) + 0.3 * sin(4 * .pi * tone.frequency * t) * exp(-t / 0.04)
+                samples[i] += (1 - exp(-t / 0.004)) * exp(-t / decay) * body
+            }
+        }
+        let peak = max(samples.map(abs).max() ?? 1, 1e-6)
+        let tail = 0.03 * rate // fade to silence, so the end does not click
+        var data = Data()
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        data.append(contentsOf: Array("RIFF".utf8)); append(UInt32(36 + count * 2))
+        data.append(contentsOf: Array("WAVEfmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
+        append(UInt32(rate)); append(UInt32(rate) * 2); append(UInt16(2)); append(UInt16(16))
+        data.append(contentsOf: Array("data".utf8)); append(UInt32(count * 2))
+        for (i, sample) in samples.enumerated() {
+            let fade = min(1, Double(count - i) / tail)
+            append(Int16(sample / peak * fade * 0.8 * 32_767))
+        }
+        return data
     }
 }

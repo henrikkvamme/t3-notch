@@ -71,7 +71,7 @@ final class OverlayUIState {
     var onboardingHeld: Set<String> = []
     /// The keys card's shortcuts tried so far.
     var onboardingTried: Set<OnboardingTip> = []
-    /// Counts the tour's successes; each change plays the success pulse.
+    /// Counts the tour's successes; each change plays the success moment.
     var onboardingSuccess = 0
     var onOnboardingStep: ((OnboardingStep) -> Void)?
     var onOnboardingPickerClosed: (() -> Void)?
@@ -115,6 +115,8 @@ struct OverlayView: View {
                                               bottomTrailingRadius: shown ? 26 : notchRadius,
                                               style: .continuous))
             .shadow(color: .black.opacity(shown ? 0.45 : 0), radius: shown ? 24 : 0, y: shown ? 10 : 0)
+            // The tour's successes stretch the island a little and let it spring back.
+            .modifier(IslandBreath(trigger: ui.onboardingSuccess, big: ui.onboarding == .done))
             // A drawn notch on screens without one fades rather than sitting there black.
             .opacity(shown || ui.hasRealNotch ? 1 : 0)
             .animation(Motion.content, value: layoutKey)
