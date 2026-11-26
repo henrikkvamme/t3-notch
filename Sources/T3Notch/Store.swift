@@ -322,6 +322,10 @@ final class Store {
     func start() {
         guard !Store.demo else { return }
         checkPresence()
+        // A socket to another machine is dead after sleep, and says so only 40 s later.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.linked.values.forEach { $0.reconnectNow() } }
+        }
         presenceTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkPresence() }
         }
@@ -330,12 +334,14 @@ final class Store {
     private func checkPresence() {
         let now = T3Runtime.current()
         if now == nil {
-            if runtime != nil { disconnect(); connection = .t3NotRunning }
+            if runtime != nil { disconnect(); forgetEverything(); connection = .t3NotRunning }
             runtime = nil
             return
         }
         watchT3Window()
         if now != runtime || (connection != .connected && connection != .connecting && reconnectTask == nil) {
+            // Another T3 (a different server) has other chats and other links.
+            if runtime != nil, now != runtime { disconnect(); forgetEverything() }
             runtime = now
             if case .failed = connection, reconnectTask != nil { return }
             connect()
@@ -397,9 +403,16 @@ final class Store {
         rpc.close()
         shellStreamId = nil
         if threadStreamRpc === rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
-        // Linked environments are found through the local server, so they start over with it.
+        // The chats stay in the list while the socket comes back: the next shell snapshot
+        // replaces them (`markStale`). Linked environments keep their own sockets; they need
+        // the local server only to pair.
+    }
+
+    /// Closes the linked environments and empties the list: T3 quit, or another T3 runs now.
+    private func forgetEverything() {
         for env in linked.values { env.stop() }
         linked = [:]
+        stale = [:]
         threads = [:]
         projects = [:]
         shellVersion &+= 1
@@ -459,12 +472,14 @@ final class Store {
             env.onDisconnected = { [weak self] env in self?.environmentClosed(env) }
             env.rpc.onProtocolError = { [weak self] reason, raw in self?.reportProtocolBreak("\(env.label): \(reason)", raw: raw) }
             linked[id] = env
+            restoreShell(of: env)
             env.start()
         }
         for (id, env) in linked where !seen.contains(id) {
             env.stop()
             linked[id] = nil
             dropEnvironment(id)
+            ShellCache.set(id, nil)
         }
     }
 
@@ -487,15 +502,64 @@ final class Store {
     private func environmentClosed(_ env: LinkedEnvironment) {
         if threadStreamRpc === env.rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
         env.shellStreamId = nil
-        dropEnvironment(env.id)
+        // Its chats stay in the list; the environment connects again by itself.
     }
 
     /// Removes an environment's chats and projects from the list.
     private func dropEnvironment(_ environmentId: String) {
         let prefix = environmentId + "/"
+        stale[environmentId] = nil
         threads = threads.filter { !$0.key.hasPrefix(prefix) }
         projects = projects.filter { !$0.key.hasPrefix(prefix) }
         shellVersion &+= 1
+    }
+
+    /// Rows from before a shell subscription started, by environment. A new snapshot names
+    /// the rows that still exist; `synchronized` ends it, and the rest are removed then.
+    /// So a reconnect replaces the list in one step and the chats never leave the island.
+    @ObservationIgnored private var stale: [String: Set<String>] = [:]
+
+    private func markStale(_ environmentId: String) {
+        let prefix = environmentId + "/"
+        stale[environmentId] = Set(threads.keys.filter { $0.hasPrefix(prefix) })
+            .union(projects.keys.filter { $0.hasPrefix(prefix) })
+    }
+
+    private func removeStale(_ environmentId: String) {
+        guard let keys = stale.removeValue(forKey: environmentId), !keys.isEmpty else { return }
+        for key in keys { threads[key] = nil; projects[key] = nil }
+    }
+
+    /// Shows a linked environment's chats from the last run until its socket opens. A linked
+    /// environment can take seconds to answer (a relay, a Mac that just woke), or be out of reach.
+    private func restoreShell(of env: LinkedEnvironment) {
+        let prefix = env.id + "/"
+        guard !threads.keys.contains(where: { $0.hasPrefix(prefix) }), let saved = ShellCache.get(env.id) else { return }
+        for t in saved["threads"].array ?? [] { if let o = t.object, let id = o["id"]?.string { threads[Self.key(env.id, id)] = Self.scoped(o, environmentId: env.id, label: env.label) } }
+        for p in saved["projects"].array ?? [] { if let o = p.object, let id = o["id"]?.string { projects[Self.key(env.id, id)] = Self.scoped(o, environmentId: env.id, label: env.label) } }
+        shellVersion &+= 1
+        focusLastOpened()
+    }
+
+    @ObservationIgnored private var shellSaveTasks: [String: Task<Void, Never>] = [:]
+
+    /// Writes a linked environment's rows to disk soon, at most once in five seconds.
+    private func saveShellSoon(_ environmentId: String) {
+        guard shellSaveTasks[environmentId] == nil else { return }
+        shellSaveTasks[environmentId] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self else { return }
+            self.shellSaveTasks[environmentId] = nil
+            // Not while a snapshot is only partly in, and not after the link is gone.
+            guard self.linked[environmentId] != nil, self.stale[environmentId] == nil else { return }
+            let prefix = environmentId + "/"
+            let rows: JSON = .object([
+                "threads": .array(self.threads.filter { $0.key.hasPrefix(prefix) }.map(\.value)),
+                "projects": .array(self.projects.filter { $0.key.hasPrefix(prefix) }.map(\.value)),
+            ])
+            let data = rows.encoded()
+            Task.detached(priority: .utility) { ShellCache.write(environmentId, data) }
+        }
     }
 
     /// The socket for an environment: the local one or a connected linked one.
@@ -521,7 +585,7 @@ final class Store {
 
     private func subscribeShell() {
         guard let env = environmentId else { return }
-        dropEnvironment(env)
+        markStale(env)
         shellStreamId = rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self] item in
             self?.applyShell(item, environmentId: env)
         }, onEnd: { [weak self] result in
@@ -530,7 +594,7 @@ final class Store {
     }
 
     private func subscribeShell(of env: LinkedEnvironment) {
-        dropEnvironment(env.id)
+        markStale(env.id)
         env.shellStreamId = env.rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self, weak env] item in
             guard let self, let env else { return }
             self.applyShell(item, environmentId: env.id, label: env.label)
@@ -559,15 +623,16 @@ final class Store {
                 return
             }
             // A snapshot arrives in parts, and parts can carry different sequences (some
-            // only projects). Merge every part; the lists were cleared when this
-            // subscription started, and removals arrive as thread.removed events.
-            for t in ts { if let o = t.object, let id = o["id"]?.string { threads[Self.key(env, id)] = Self.scoped(o, environmentId: env, label: label) } }
-            for p in ps { if let o = p.object, let id = o["id"]?.string { projects[Self.key(env, id)] = Self.scoped(o, environmentId: env, label: label) } }
+            // only projects). Merge every part. Rows from before this subscription that no
+            // part names are removed at `synchronized`; later removals arrive as events.
+            for t in ts { if let o = t.object, let id = o["id"]?.string { let key = Self.key(env, id); threads[key] = Self.scoped(o, environmentId: env, label: label); stale[env]?.remove(key) } }
+            for p in ps { if let o = p.object, let id = o["id"]?.string { let key = Self.key(env, id); projects[key] = Self.scoped(o, environmentId: env, label: label); stale[env]?.remove(key) } }
             // Select mode can start before the chats load (just after launch).
             focusLastOpened()
         case "thread.updated":
             guard let t = item["thread"].object, let id = t["id"]?.string else { return }
             let key = Self.key(env, id)
+            stale[env]?.remove(key)
             let old = threads[key]
             if item["location"].string == "active" { threads[key] = Self.scoped(t, environmentId: env, label: label) } else { threads[key] = nil }
             noticeTransition(id: key, old: old, new: threads[key])
@@ -576,12 +641,15 @@ final class Store {
         case "thread.removed":
             if let id = item["threadId"].string { threads[Self.key(env, id)] = nil }
         case "project.updated":
-            if let p = item["project"].object, let id = p["id"]?.string { projects[Self.key(env, id)] = Self.scoped(p, environmentId: env, label: label) }
+            if let p = item["project"].object, let id = p["id"]?.string { let key = Self.key(env, id); stale[env]?.remove(key); projects[key] = Self.scoped(p, environmentId: env, label: label) }
         case "project.removed":
             if let id = item["projectId"].string { projects[Self.key(env, id)] = nil }
+        case "synchronized":
+            removeStale(env)
         default:
-            break // "synchronized", "snapshot-required", or a kind added later
+            break // "snapshot-required", or a kind added later
         }
+        if label != nil { saveShellSoon(env) }
         shellVersion &+= 1
         syncThreadSubscription()
     }

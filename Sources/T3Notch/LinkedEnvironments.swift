@@ -38,6 +38,34 @@ enum LinkedCredentials {
     }
 }
 
+/// The chats and projects of each linked environment as last seen, one 0600 file per
+/// environment beside the tokens. The island shows them at launch, before that environment
+/// answers. The local environment needs none: it answers at once.
+enum ShellCache {
+    private static func file(_ environmentId: String) -> URL {
+        let name = environmentId.filter { $0.isLetter || $0.isNumber || $0 == "-" }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/T3Notch/shell-\(name).json")
+    }
+
+    static func get(_ environmentId: String) -> JSON? {
+        guard let data = try? Data(contentsOf: file(environmentId)) else { return nil }
+        return try? JSON.parse(data)
+    }
+
+    static func set(_ environmentId: String, _ rows: JSON?) {
+        guard let rows else { try? FileManager.default.removeItem(at: file(environmentId)); return }
+        write(environmentId, rows.encoded())
+    }
+
+    nonisolated static func write(_ environmentId: String, _ data: Data) {
+        let url = file(environmentId)
+        let fm = FileManager.default
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        fm.createFile(atPath: url.path, contents: data, attributes: [.posixPermissions: 0o600])
+    }
+}
+
 /// A T3 environment the local one links to (`t3 environment list`), such as a server the
 /// desktop app also shows chats from. The overlay connects to it directly, the way T3's own
 /// client does (`connectLinkedEnvironment` in `packages/client-runtime/src/linkedThread.ts`):
@@ -82,7 +110,7 @@ final class LinkedEnvironment {
     @ObservationIgnored var requestPairing: (String) async throws -> JSON = { _ in throw AppError.rpc("no local server") }
     /// The socket opened; subscribe to its shell.
     @ObservationIgnored var onConnected: (LinkedEnvironment) -> Void = { _ in }
-    /// The socket closed or failed; drop this environment's chats.
+    /// The socket closed or failed; its chats stay in the list until it answers again.
     @ObservationIgnored var onDisconnected: (LinkedEnvironment) -> Void = { _ in }
 
     init(id: String, label: String) {
