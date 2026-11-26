@@ -58,6 +58,27 @@ enum Onboarding {
 
 // MARK: - Flow
 
+/// The shortcuts the keys card asks you to try.
+enum OnboardingTip: CaseIterable {
+    case clip, openInT3, toggleDot
+
+    var binding: KeyBinding {
+        switch self {
+        case .clip: return KeyBinding(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey), key: "P")
+        case .openInT3: return Settings.openInT3Key
+        case .toggleDot: return Settings.toggleDotKey
+        }
+    }
+
+    var text: String {
+        switch self {
+        case .clip: return "Clip part of the screen into your message"
+        case .openInT3: return "Open the chat in T3 Code"
+        case .toggleDot: return "Hide or show the status dot"
+        }
+    }
+}
+
 extension PanelController {
     /// Opens the island on the tour, at `step`.
     func startOnboarding(at step: OnboardingStep = .welcome) {
@@ -75,6 +96,7 @@ extension PanelController {
         withAnimation(Motion.content) {
             ui.onboarding = step
             ui.onboardingKeysLit = false
+            ui.onboardingTried = []
         }
         switch step {
         case .welcome:
@@ -101,14 +123,29 @@ extension PanelController {
         case .chats, .tips:
             break
         case .done:
+            celebrate(big: true)
             onboardingTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1.5))
+                try? await Task.sleep(for: .seconds(1.8))
                 guard let self, !Task.isCancelled else { return }
                 self.hide()
                 try? await Task.sleep(for: .milliseconds(500))
                 guard !Task.isCancelled else { return }
                 self.ui.onboarding = nil
             }
+        }
+    }
+
+    /// A step's success: the keycaps light green with a pulse, a soft sound, and a tap on the
+    /// trackpad when a finger is on it.
+    func celebrate(big: Bool = false) {
+        withAnimation(Motion.snappy) {
+            ui.onboardingKeysLit = true
+            ui.onboardingSuccess += 1
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        if let sound = NSSound(named: big ? "Glass" : "Pop") {
+            sound.volume = big ? 0.35 : 0.5
+            sound.play()
         }
     }
 
@@ -125,13 +162,54 @@ extension PanelController {
         guard onboardingHidOnce else { return }
         onboardingTask?.cancel()
         onboardingTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(350))
+            // Light up once the island has opened, so the success is seen.
+            try? await Task.sleep(for: .milliseconds(380))
             guard let self, !Task.isCancelled else { return }
-            withAnimation(Motion.snappy) { self.ui.onboardingKeysLit = true }
-            try? await Task.sleep(for: .seconds(1.4))
+            self.celebrate()
+            try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
             self.go(to: .chats)
         }
+    }
+
+    /// The Chats step: the shortcut lights its keys, then opens the real chat list.
+    private func onboardingShowChats() {
+        guard !ui.onboardingKeysLit else { return }
+        celebrate()
+        onboardingTask?.cancel()
+        onboardingTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(650))
+            guard let self, !Task.isCancelled, self.ui.onboarding == .chats else { return }
+            self.setPicker(true)
+        }
+    }
+
+    /// One of the keys card's shortcuts was pressed. It ticks off instead of acting, and the
+    /// tour ends once all are tried.
+    func triedTip(_ tip: OnboardingTip) {
+        guard ui.onboarding == .tips, !ui.onboardingTried.contains(tip) else { return }
+        withAnimation(Motion.snappy) { _ = ui.onboardingTried.insert(tip) }
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        if let sound = NSSound(named: "Pop") { sound.volume = 0.5; sound.play() }
+        guard ui.onboardingTried.count == OnboardingTip.allCases.count else { return }
+        onboardingTask?.cancel()
+        onboardingTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(0.9))
+            guard !Task.isCancelled else { return }
+            self?.go(to: .done)
+        }
+    }
+
+    /// Keeps `ui.onboardingHeld` to the keys held down, while the tour shows.
+    func trackHeldKeys(_ event: NSEvent) {
+        guard ui.onboarding != nil else { return }
+        var held = ui.onboardingHeld
+        let flags = event.modifierFlags
+        for (flag, symbol) in [(NSEvent.ModifierFlags.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")] {
+            if flags.contains(flag) { held.insert(symbol) } else { held.remove(symbol) }
+        }
+        if event.type == .keyUp { held.subtract(held.filter { !["⌃", "⌥", "⇧", "⌘"].contains($0) }) }
+        if held != ui.onboardingHeld { withAnimation(Motion.select) { ui.onboardingHeld = held } }
     }
 
     /// Keys while the tour shows. True when the key was handled.
@@ -139,6 +217,9 @@ extension PanelController {
         guard let step = ui.onboarding else { return false }
         // In the Chats step the real chat list is open; it handles its own keys.
         if step == .chats && ui.pickerOpen { return false }
+        if let name = KeyBinding(event: event)?.key ?? event.charactersIgnoringModifiers?.uppercased() {
+            withAnimation(Motion.select) { _ = ui.onboardingHeld.insert(name) }
+        }
         switch Int(event.keyCode) {
         case kVK_Escape:
             if step.skippable { go(to: .done) } else { hide() }
@@ -148,7 +229,11 @@ extension PanelController {
             if step == .tips { go(to: .done) }
             return true
         default:
-            if step == .chats && Settings.showChatsKey.matches(event) { return false }
+            if step == .chats && Settings.showChatsKey.matches(event) { onboardingShowChats(); return true }
+            if step == .tips, let tip = OnboardingTip.allCases.first(where: { $0.binding.matches(event) }) {
+                triedTip(tip)
+                return true
+            }
             if event.modifierFlags.contains(.command) && event.keyCode == UInt16(kVK_ANSI_Comma) { return false }
             return true // nothing else to type into during the tour
         }
@@ -159,7 +244,6 @@ extension PanelController {
         guard ui.onboarding == .chats else { return }
         go(to: .tips)
     }
-
 }
 
 // MARK: - Views
@@ -241,21 +325,23 @@ struct OnboardingView: View {
     }
 
     private var hotkey: some View {
-        VStack(spacing: 18) {
-            KeycapRow(binding: Settings.showIslandKey, lit: ui.onboardingKeysLit)
+        let lit = ui.onboardingKeysLit
+        return VStack(spacing: 18) {
+            keys(Settings.showIslandKey)
             VStack(spacing: 6) {
-                title(ui.onboardingKeysLit ? "That's the one to remember" : "Press \(Settings.showIslandKey.label)")
-                caption(ui.onboardingKeysLit ? "It opens the island from any app."
+                title(lit ? "That's the one to remember" : "Press \(Settings.showIslandKey.label)", done: lit)
+                caption(lit ? "It opens the island from any app."
                         : "Press it to fold the island away, then again to bring it back.")
             }
         }
     }
 
     private var chats: some View {
-        VStack(spacing: 18) {
-            KeycapRow(binding: Settings.showChatsKey, lit: false)
+        let lit = ui.onboardingKeysLit
+        return VStack(spacing: 18) {
+            keys(Settings.showChatsKey)
             VStack(spacing: 6) {
-                title("Press \(Settings.showChatsKey.label) to see your chats")
+                title(lit ? "Your chats" : "Press \(Settings.showChatsKey.label) to see your chats", done: lit)
                 caption("Pick one, and its replies show up here as they come in.")
             }
         }
@@ -263,15 +349,15 @@ struct OnboardingView: View {
 
     private var tips: some View {
         VStack(spacing: 16) {
-            title("A few more keys")
+            VStack(spacing: 6) {
+                title("Try a few more keys")
+                caption("Press each one to try it.")
+            }
             VStack(spacing: 0) {
-                tipRow(KeyBinding(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey), key: "P"),
-                       "Clip part of the screen into your message")
-                divider
-                tipRow(Settings.openInT3Key, "Open the chat in T3 Code")
-                divider
-                tipRow(Settings.toggleDotKey, "Hide or show the status dot")
-                divider
+                ForEach(OnboardingTip.allCases, id: \.self) { tip in
+                    tipRow(tip)
+                    divider
+                }
                 LoginRow()
             }
             .padding(.horizontal, 16).padding(.vertical, 4)
@@ -292,11 +378,19 @@ struct OnboardingView: View {
     private var done: some View {
         VStack(spacing: 10) {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundStyle(.green)
-                .symbolEffect(.bounce, value: step)
+                .symbolEffect(.bounce, value: ui.onboardingSuccess)
+                .background(SuccessPulse(trigger: ui.onboardingSuccess, shape: Circle(), scale: 2.2))
             title("All set")
             caption("Right-click the dot by the notch for settings.")
         }
         .padding(.bottom, 4)
+    }
+
+    /// Big keycaps that go down while held and light green with a pulse on success.
+    private func keys(_ binding: KeyBinding) -> some View {
+        KeycapRow(binding: binding, lit: ui.onboardingKeysLit, held: ui.onboardingHeld)
+            .background(SuccessPulse(trigger: ui.onboardingSuccess,
+                                     shape: RoundedRectangle(cornerRadius: 20, style: .continuous), scale: 1.25))
     }
 
     // MARK: Pieces
@@ -319,9 +413,16 @@ struct OnboardingView: View {
         }
     }
 
-    private func title(_ text: String) -> some View {
-        Text(text).font(.system(size: 20, weight: .semibold)).multilineTextAlignment(.center)
-            .contentTransition(.opacity)
+    private func title(_ text: String, done: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            if done {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    .transition(.scale(0.4).combined(with: .opacity))
+            }
+            Text(text).contentTransition(.opacity)
+        }
+        .font(.system(size: 20, weight: .semibold)).multilineTextAlignment(.center)
+        .animation(Motion.open, value: done)
     }
 
     private func caption(_ text: String) -> some View {
@@ -363,12 +464,19 @@ struct OnboardingView: View {
         .animation(Motion.snappy, value: state)
     }
 
-    private func tipRow(_ binding: KeyBinding, _ text: String) -> some View {
-        HStack(spacing: 12) {
-            KeycapRow(binding: binding, lit: false, size: 26)
+    /// A shortcut to try: its keys go down while held, and it ticks off once pressed.
+    private func tipRow(_ tip: OnboardingTip) -> some View {
+        let tried = ui.onboardingTried.contains(tip)
+        return HStack(spacing: 12) {
+            KeycapRow(binding: tip.binding, lit: tried, held: tried ? [] : ui.onboardingHeld, size: 26)
                 .frame(width: 128, alignment: .leading)
-            Text(text).font(.system(size: 13))
+            Text(tip.text).font(.system(size: 13)).foregroundStyle(tried ? .secondary : .primary)
             Spacer(minLength: 0)
+            Image(systemName: tried ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 16))
+                .foregroundStyle(tried ? AnyShapeStyle(.green) : AnyShapeStyle(.quaternary))
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: tried)
         }
         .padding(.vertical, 8)
     }
@@ -397,29 +505,34 @@ private struct LoginRow: View {
 struct KeycapRow: View {
     let binding: KeyBinding
     var lit: Bool
+    /// Keys held down now, by symbol; those keycaps go down.
+    var held: Set<String> = []
     var size: CGFloat = 60
 
     var body: some View {
         HStack(spacing: size * 0.16) {
             ForEach(Array(binding.keycaps.enumerated()), id: \.offset) { i, cap in
                 Keycap(symbol: cap.symbol, name: size >= 40 ? cap.name : nil,
-                       wide: cap.symbol == "Space", lit: lit, size: size)
-                    .animation(Motion.snappy.delay(Double(i) * 0.06), value: lit)
+                       wide: cap.symbol == "Space", lit: lit, pressed: held.contains(cap.symbol), size: size)
+                    .animation(Motion.snappy.delay(lit ? Double(i) * 0.07 : 0), value: lit)
             }
         }
     }
 }
 
-/// One key: a dark cap with a lit top edge, which sinks and glows green when pressed.
+/// One key: a dark cap with a lit top edge. It goes down while pressed, and on success it
+/// lights green and pops.
 struct Keycap: View {
     let symbol: String
     var name: String?
     var wide = false
     var lit = false
+    var pressed = false
     var size: CGFloat = 60
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: size * 0.22, style: .continuous) }
     private var depth: CGFloat { max(2, size * 0.06) }
+    private var down: Bool { pressed || lit }
 
     var body: some View {
         VStack(spacing: size * 0.04) {
@@ -433,15 +546,45 @@ struct Keycap: View {
         .foregroundStyle(lit ? Color.green : .primary)
         .frame(width: wide ? size * (name == nil ? 2.2 : 2.8) : size, height: size)
         .background {
-            shape.fill(lit ? Color.green.opacity(0.22) : Color(white: 0.17))
+            shape.fill(lit ? Color.green.opacity(0.22) : pressed ? Color(white: 0.24) : Color(white: 0.17))
                 .overlay(shape.fill(LinearGradient(colors: [.white.opacity(0.10), .clear], startPoint: .top, endPoint: .center)))
                 .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(lit ? 0.35 : 0.22), .white.opacity(0.03)],
                                                            startPoint: .top, endPoint: .bottom), lineWidth: 1))
         }
         // The key's side, under it; it shortens as the key goes down.
-        .background(shape.fill(Color(white: 0.06)).offset(y: lit ? depth * 0.3 : depth))
-        .offset(y: lit ? depth * 0.7 : 0)
+        .background(shape.fill(Color(white: 0.06)).offset(y: down ? depth * 0.3 : depth))
+        .offset(y: down ? depth * 0.7 : 0)
         .shadow(color: lit ? .green.opacity(0.45) : .black.opacity(0.5), radius: lit ? 14 : 5, y: lit ? 0 : 3)
+        // On success: a quick pop up, then settle.
+        .keyframeAnimator(initialValue: 1.0, trigger: lit) { view, scale in
+            view.scaleEffect(scale)
+        } keyframes: { _ in
+            if lit {
+                SpringKeyframe(1.12, duration: 0.14, spring: .snappy)
+                SpringKeyframe(1.0, duration: 0.4, spring: .bouncy)
+            } else {
+                LinearKeyframe(1.0, duration: 0.01)
+            }
+        }
+    }
+}
+
+/// A green outline that grows out from behind a view and fades, once per `trigger` change.
+struct SuccessPulse<S: Shape>: View {
+    let trigger: Int
+    let shape: S
+    var scale: CGFloat = 1.25
+
+    var body: some View {
+        shape.stroke(Color.green, lineWidth: 2)
+            .keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, t in
+                // At rest (t = 1) and before the first success it is invisible.
+                view.scaleEffect(1 + (scale - 1) * t).opacity(t < 1 ? 0.8 * (1 - t) : 0)
+            } keyframes: { _ in
+                LinearKeyframe(0.0, duration: 0.01)
+                CubicKeyframe(1.0, duration: 0.7)
+            }
+            .allowsHitTesting(false)
     }
 }
 

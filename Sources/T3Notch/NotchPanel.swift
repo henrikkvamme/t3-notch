@@ -84,6 +84,7 @@ final class PanelController {
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var localKeyMonitor: Any?
+    private var heldKeyMonitor: Any?
     private var peekHideTask: Task<Void, Never>?
     private var orderOutTask: Task<Void, Never>?
     /// What the current tour step waits for (see Onboarding.swift).
@@ -124,6 +125,11 @@ final class PanelController {
                 // Clicking a popped-up (peek) island opens it fully, ready to type and clip.
                 if self.ui.mode == .peek { self.expand() }
             }
+        }
+        // The tour's keycaps go down while you hold their keys.
+        heldKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyUp]) { [weak self] event in
+            MainActor.assumeIsolated { self?.trackHeldKeys(event) }
+            return event
         }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }

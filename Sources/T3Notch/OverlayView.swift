@@ -66,6 +66,12 @@ final class OverlayUIState {
     var onboarding: OnboardingStep?
     /// The tour's keycaps glow: the shortcut was just pressed.
     var onboardingKeysLit = false
+    /// Keys held down right now, by keycap symbol, so the tour's keycaps go down with them.
+    var onboardingHeld: Set<String> = []
+    /// The keys card's shortcuts tried so far.
+    var onboardingTried: Set<OnboardingTip> = []
+    /// Counts the tour's successes; each change plays the success pulse.
+    var onboardingSuccess = 0
     var onOnboardingStep: ((OnboardingStep) -> Void)?
     var onOnboardingPickerClosed: (() -> Void)?
 }
@@ -122,7 +128,7 @@ struct OverlayView: View {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
          store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip,
-         ui.onboarding, ui.onboardingKeysLit]
+         ui.onboarding, ui.onboardingKeysLit, ui.onboardingTried]
     }
 
     private var content: some View {

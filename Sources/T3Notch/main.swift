@@ -133,7 +133,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         !KeyBinding.islandReserved.contains { $0.sameKeys(as: binding) } && !other.sameKeys(as: binding)
     }
 
-    @objc private func toggleDot() { panel.ui.dotHiddenByUser.toggle() }
+    @objc private func toggleDot() {
+        // The tour's keys card asks you to try this shortcut; trying it there ticks it off.
+        if panel.ui.onboarding == .tips { panel.triedTip(.toggleDot); return }
+        panel.ui.dotHiddenByUser.toggle()
+    }
     @objc private func toggleLogin() {
         let service = SMAppService.mainApp
         do {
