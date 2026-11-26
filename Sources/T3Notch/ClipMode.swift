@@ -466,9 +466,11 @@ final class ClipController {
     }
 
     /// The tap was off for a moment. A press it holds may have ended unseen, and would keep
-    /// `release` from ending the hold: drop it. The hold ends here if the keys went up too.
+    /// `release` from ending the hold: drop it, unless the button is still down (a drag goes
+    /// on). The hold ends here if the keys went up too.
     private func missedEvents() {
         guard state.phase == .hover, !finished else { return }
+        if pressAt != nil, CGEventSource.buttonState(.combinedSessionState, button: .left) { return }
         pressAt = nil
         state.drag = nil
         let flags = NSEvent.modifierFlags
