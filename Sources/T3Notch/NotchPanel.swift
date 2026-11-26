@@ -137,10 +137,11 @@ final class PanelController {
             MainActor.assumeIsolated { self?.trackHeldKeys(event) }
             return event
         }
-        // A draft, selections or a running select mode belong to the focused chat.
+        // A draft, selections, a running select mode and a message on its way belong to the
+        // focused chat.
         store.holdsTarget = { [weak self] in
             guard let self else { return false }
-            return !self.ui.draft.isEmpty || !self.ui.clips.isEmpty || self.clipper != nil
+            return !self.ui.draft.isEmpty || !self.ui.clips.isEmpty || self.clipper != nil || self.ui.sending > 0
         }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
@@ -230,7 +231,7 @@ final class PanelController {
         }
         panel.ignoresMouseEvents = true
         stopMouseTimer()
-        store.focusLastOpened() // as in `expand`, now that a sent draft is out of the island
+        store.focusLastOpened() // as in `expand`
         // Take the canvas away once the island has shrunk into the notch.
         orderOutTask?.cancel()
         orderOutTask = Task { [weak self] in
@@ -471,7 +472,12 @@ final class PanelController {
             return
         }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        Task { await store.send(text, steer: steer, clips: clips) }
+        ui.sending += 1
+        Task {
+            await store.send(text, steer: steer, clips: clips)
+            ui.sending -= 1
+            store.focusLastOpened()
+        }
         hide() // sent: tuck the island away and hand focus back
     }
 
