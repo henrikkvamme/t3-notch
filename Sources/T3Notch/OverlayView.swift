@@ -263,7 +263,13 @@ struct OverlayView: View {
     }
 
     @ViewBuilder private func requestCard(_ req: Store.PendingRequest) -> some View {
+        // A question in T3's indigo, an approval in amber, with T3's sidebar labels.
+        let isQuestion = req.kind == "user_input"
+        let stateColor = isQuestion ? ThreadRow.indigo : ThreadRow.amber
         VStack(alignment: .leading, spacing: 8) {
+            Text(isQuestion ? "Awaiting Input" : "Pending Approval")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(stateColor)
             if req.kind == "user_input", let questions = req.item?["questions"].array {
                 let parsed = questions.map(UserInputQuestion.init)
                 ForEach(Array(parsed.enumerated()), id: \.offset) { _, q in question(q, request: req.id) }
@@ -297,7 +303,8 @@ struct OverlayView: View {
             }
         }
         .padding(12)
-        .glassEffect(.regular.tint(.orange.opacity(0.22)), in: .rect(cornerRadius: 18))
+        .glassEffect(.regular.tint(stateColor.opacity(0.22)), in: .rect(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(stateColor.opacity(0.35), lineWidth: 1))
         .glassEffectID("request", in: glass)
     }
 

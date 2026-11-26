@@ -235,6 +235,7 @@ struct StatusDotGlyph: View {
         switch indicator {
         case .hidden, .idle: return ("circle.fill", .gray.opacity(0.6), 0.5)
         case .running: return ("circle.fill", Color(red: 0.12, green: 0.55, blue: 0.24), 0.6) // dark green, steady
+        case .awaitingInput: return ("questionmark.circle.fill", ThreadRow.indigo, 1) // T3's "Awaiting Input"
         case .needsYou: return ("exclamationmark.circle.fill", .orange, 1)
         case .failed: return ("xmark.circle.fill", .red, 1)
         case .done: return ("checkmark.circle.fill", .blue, 1)
@@ -263,7 +264,7 @@ struct StatusDotGlyph: View {
 enum DotPreview {
     static func render(to path: String) {
         let states: [(Store.Indicator, String)] = [
-            (.idle, "Idle, or no chat / T3 off"), (.running, "Running"), (.needsYou, "Needs you"),
+            (.idle, "Idle, or no chat / T3 off"), (.running, "Running"), (.awaitingInput, "Asks a question"), (.needsYou, "Needs you"),
             (.failed, "Failed"), (.done, "Reply you haven't seen"), (.hidden, "Hidden (overlay open)"),
         ]
         let view = VStack(alignment: .leading, spacing: 14) {

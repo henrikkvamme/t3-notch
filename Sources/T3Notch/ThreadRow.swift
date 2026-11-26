@@ -74,10 +74,12 @@ struct ThreadRow: View {
         }
     }
 
-    /// T3's top-line statuses: Setting up, Working, Approval, Waiting, Failed.
+    /// T3's sidebar statuses and colours (`resolveThreadStatusPill` in
+    /// `apps/web/src/components/Sidebar.logic.ts`): a question is "Awaiting Input" in indigo,
+    /// an approval "Pending Approval" in amber.
     private var status: (String, Color)? {
         if let request = thread["pendingRuntimeRequest"].object {
-            return request["kind"]?.string == "user_input" ? ("Waiting", .secondary) : ("Approval", .orange)
+            return request["kind"]?.string == "user_input" ? ("Awaiting Input", Self.indigo) : ("Pending Approval", Self.amber)
         }
         switch thread["activityRunStatus"].string ?? thread["status"].string {
         case "preparing", "starting": return ("Setting up", .blue)
@@ -87,6 +89,10 @@ struct ThreadRow: View {
         default: return nil
         }
     }
+
+    /// T3's dark-theme indigo-300 and amber-300.
+    static let indigo = Color(red: 0.65, green: 0.71, blue: 0.99)
+    static let amber = Color(red: 0.99, green: 0.83, blue: 0.30)
 
     private var branch: String? { thread["branch"].string }
 
