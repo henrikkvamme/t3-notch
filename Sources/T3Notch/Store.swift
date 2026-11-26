@@ -59,8 +59,38 @@ final class Store {
     var focusedThreadId: String? = Store.demo ? nil : UserDefaults.standard.string(forKey: "focusedThreadId") {
         didSet {
             if !Store.demo { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId") }
+            setFocusedAt(Date())
             syncThreadSubscription()
         }
+    }
+    /// When the focused chat was chosen, to compare with chats opened in T3 itself: now for a
+    /// choice in the island, the T3 open time when `focusLastOpened` follows T3.
+    private var focusedAt = UserDefaults.standard.object(forKey: "focusedAt") as? Date ?? .distantPast
+    private func setFocusedAt(_ date: Date) {
+        focusedAt = date
+        if !Store.demo { UserDefaults.standard.set(date, forKey: "focusedAt") }
+    }
+
+    /// The chat opened most recently in T3 (`opens.openedAt`, epoch ms), if T3 reports it.
+    private var lastOpenedInT3: (id: String, at: Date)? {
+        var best: (id: String, at: Date)?
+        for (id, t) in threads where t["archivedAt"].isNull && t["deletedAt"].isNull {
+            guard case .number(let ms) = t["opens"]["openedAt"] else { continue }
+            let at = Date(timeIntervalSince1970: ms / 1000)
+            if best.map({ at > $0.at }) ?? true { best = (id, at) }
+        }
+        return best
+    }
+
+    /// Select mode sends picks to the last opened session: the chat opened last in T3, unless
+    /// a chat was picked in the island after that. Makes it the focused chat.
+    func focusLastOpened() {
+        guard let opened = lastOpenedInT3, opened.at > focusedAt || targetThreadId == nil,
+              opened.id != focusedThreadId else { return }
+        focusedThreadId = opened.id
+        // Following T3 is not a choice made now: a chat opened in T3 later, or found in a
+        // later part of the launch snapshot, must still win.
+        setFocusedAt(opened.at)
     }
 
     // MARK: - Demo mode (`T3Notch --demo`, see Demo.swift)
@@ -363,6 +393,8 @@ final class Store {
             // subscription started, and removals arrive as thread.removed events.
             for t in ts { if let o = t.object, let id = o["id"]?.string { threads[Self.key(env, id)] = Self.scoped(o, environmentId: env, label: label) } }
             for p in ps { if let o = p.object, let id = o["id"]?.string { projects[Self.key(env, id)] = Self.scoped(o, environmentId: env, label: label) } }
+            // Select mode can start before the chats load (just after launch).
+            focusLastOpened()
         case "thread.updated":
             guard let t = item["thread"].object, let id = t["id"]?.string else { return }
             let key = Self.key(env, id)

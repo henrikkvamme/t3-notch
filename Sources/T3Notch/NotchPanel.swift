@@ -486,13 +486,15 @@ final class PanelController {
     /// first. Picks go to the focused chat and open the island; Esc with no picks leaves
     /// everything as it was.
     func startSelecting() {
-        guard clipper == nil, ui.mode != .expanded else { return }
+        guard clipper == nil else { return }
         guard Permission.screenRecording.isGranted, Permission.accessibility.isGranted else {
             expand()
             showMissingPermissions()
             return
         }
-        let wasPeeking = ui.mode != .hidden
+        store.focusLastOpened()
+        let wasPeeking = ui.mode == .peek
+        let wasExpanded = ui.mode == .expanded
         // Before the clipper makes T3 Notch active: the island hands focus back to this app.
         rememberFrontApp()
         orderOutTask?.cancel()
@@ -508,7 +510,7 @@ final class PanelController {
             self.clipper = nil
             self.ui.clipDepth = depth
             if clips.isEmpty {
-                if wasPeeking { self.peek(autoHide: true) }
+                if wasExpanded { self.expand() } else if wasPeeking { self.peek(autoHide: true) }
                 return
             }
             self.ui.clips += clips
