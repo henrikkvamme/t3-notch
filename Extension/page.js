@@ -119,6 +119,32 @@
 
   const isPassword = (el) => el.tagName === "INPUT" && (el.type === "password" || el.autocomplete?.includes("password"));
 
+  // URLs lose credentials, and on public hosts their query and fragment, where reset
+  // tokens and session keys live. The same rule as PickContext.sanitize in the app.
+  const URL_ATTRS = new Set(["href", "src", "action", "formaction", "poster", "cite", "background",
+    "ping", "data", "xlink:href", "manifest", "longdesc", "itemid", "codebase", "usemap"]);
+  const isLocalHost = (raw) => {
+    const h = raw.replace(/^\[|\]$/g, "").toLowerCase();
+    if (!h) return false;
+    if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || !h.includes(".") && !h.includes(":")) return true;
+    const v4 = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (v4) {
+      const [a, b] = [+v4[1], +v4[2]];
+      return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+    }
+    return h === "::1" || /^f[cd]/.test(h) || h.startsWith("fe80:");
+  };
+  const cleanURL = (v) => {
+    let u;
+    try { u = new URL(v, location.href); } catch { return v; }
+    if (u.protocol !== "http:" && u.protocol !== "https:" && u.protocol !== "ws:" && u.protocol !== "wss:") return v;
+    u.username = ""; u.password = "";
+    if (!isLocalHost(u.hostname)) { u.search = ""; u.hash = ""; }
+    return u.href;
+  };
+  const cleanAttr = (name, v) =>
+    URL_ATTRS.has(name.toLowerCase()) || /^(https?|wss?):\/\//i.test(v.trim()) ? cleanURL(v.trim()) : v;
+
   // The element's HTML without scripts, styles, inline handlers, typed values or data URLs.
   const cleanHTML = (el, max) => {
     const copy = el.cloneNode(true);
@@ -129,8 +155,10 @@
       for (const a of [...e.attributes]) {
         const v = a.value;
         if (a.name.startsWith("on") || a.name === "value" || a.name === "style" || a.name === "nonce" || a.name === "srcset" ||
-          /^(data|blob|javascript):/i.test(v)) e.removeAttribute(a.name);
-        else if (v.length > 200) e.setAttribute(a.name, v.slice(0, 199) + "…");
+          /^\s*(data|blob|javascript):/i.test(v)) { e.removeAttribute(a.name); continue; }
+        const c = cleanAttr(a.name, v);
+        if (c.length > 200) e.setAttribute(a.name, c.slice(0, 199) + "…");
+        else if (c !== v) e.setAttribute(a.name, c);
       }
       if (e.tagName === "TEXTAREA") e.textContent = "";
     }
@@ -143,8 +171,8 @@
     if (!el) return null;
     const attributes = {};
     for (const a of el.attributes) {
-      if (a.name === "value" || a.name === "style" || a.name.startsWith("on") || /^(data|blob|javascript):/i.test(a.value)) continue;
-      attributes[a.name] = clip(a.value, 200);
+      if (a.name === "value" || a.name === "style" || a.name.startsWith("on") || /^\s*(data|blob|javascript):/i.test(a.value)) continue;
+      attributes[a.name] = clip(cleanAttr(a.name, a.value), 200);
     }
     let value = null;
     if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") && !isPassword(el)) value = clip(el.value, 2000) || null;

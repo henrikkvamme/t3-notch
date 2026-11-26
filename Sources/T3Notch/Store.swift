@@ -40,16 +40,18 @@ final class Store {
     /// once it is archived or deleted), opening the island shows the list. Kept across launches.
     var focusedThreadId: String? = Store.demo ? nil : UserDefaults.standard.string(forKey: "focusedThreadId") {
         didSet {
-            focusedAt = Date()
-            if !Store.demo {
-                UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId")
-                UserDefaults.standard.set(focusedAt, forKey: "focusedAt")
-            }
+            if !Store.demo { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId") }
+            setFocusedAt(Date())
             syncThreadSubscription()
         }
     }
-    /// When `focusedThreadId` last changed, to compare with chats opened in T3 itself.
+    /// When the focused chat was chosen, to compare with chats opened in T3 itself: now for a
+    /// choice in the island, the T3 open time when `focusLastOpened` follows T3.
     private var focusedAt = UserDefaults.standard.object(forKey: "focusedAt") as? Date ?? .distantPast
+    private func setFocusedAt(_ date: Date) {
+        focusedAt = date
+        if !Store.demo { UserDefaults.standard.set(date, forKey: "focusedAt") }
+    }
 
     /// The chat opened most recently in T3 (`opens.openedAt`, epoch ms), if T3 reports it.
     private var lastOpenedInT3: (id: String, at: Date)? {
@@ -68,6 +70,9 @@ final class Store {
         guard let opened = lastOpenedInT3, opened.at > focusedAt || targetThreadId == nil,
               opened.id != focusedThreadId else { return }
         focusedThreadId = opened.id
+        // Following T3 is not a choice made now: a chat opened in T3 later, or found in a
+        // later part of the launch snapshot, must still win.
+        setFocusedAt(opened.at)
     }
 
     // MARK: - Demo mode (`T3Notch --demo`, see Demo.swift)
@@ -244,7 +249,7 @@ final class Store {
             for t in ts { if let id = t["id"].string { threads[id] = t } }
             for p in ps { if let id = p["id"].string { projects[id] = p } }
             // Select mode can start before the chats load (just after launch).
-            if targetThreadId == nil { focusLastOpened() }
+            focusLastOpened()
         case "thread.updated":
             guard let t = item["thread"].object, let id = t["id"]?.string else { return }
             let old = threads[id]

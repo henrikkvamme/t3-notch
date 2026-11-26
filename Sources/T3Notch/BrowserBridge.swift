@@ -37,8 +37,11 @@ final class BrowserBridge: @unchecked Sendable {
     private final class Pending {
         var waiting: Set<Int>
         var result: [String: Any]?
+        /// Wait for every browser and keep the answer with the lowest `score`, instead of
+        /// taking the first answer.
+        let closest: Bool
         let done = DispatchSemaphore(value: 0)
-        init(waiting: Set<Int>) { self.waiting = waiting }
+        init(waiting: Set<Int>, closest: Bool) { self.waiting = waiting; self.closest = closest }
     }
 
     /// True while at least one browser is connected. Read from any thread.
@@ -122,13 +125,12 @@ final class BrowserBridge: @unchecked Sendable {
             if let data, meta?.opcode == .text,
                let msg = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                let rid = msg["id"] as? Int, let p = pending[rid], p.waiting.remove(id) != nil {
-                if msg["ok"] as? Bool == true, var result = msg["result"] as? [String: Any], p.result == nil {
+                if msg["ok"] as? Bool == true, var result = msg["result"] as? [String: Any] {
                     result["client"] = id
-                    p.result = result
-                    p.done.signal()
-                } else if p.waiting.isEmpty {
-                    p.done.signal()
+                    let score = { (r: [String: Any]?) in r?["score"] as? Double ?? .infinity }
+                    if p.result == nil || (p.closest && score(result) < score(p.result)) { p.result = result }
                 }
+                if p.waiting.isEmpty || (p.result != nil && !p.closest) { p.done.signal() }
             }
             receive(id, c)
         }
@@ -136,7 +138,7 @@ final class BrowserBridge: @unchecked Sendable {
 
     /// Sends a request to one client (or all) and waits for the first useful answer.
     /// Returns nil on timeout, when no browser is connected, or when none had an answer.
-    func request(_ body: [String: Any], to client: Int? = nil, timeout: TimeInterval) -> [String: Any]? {
+    func request(_ body: [String: Any], to client: Int? = nil, closest: Bool = false, timeout: TimeInterval) -> [String: Any]? {
         let (p, rid): (Pending?, Int) = queue.sync {
             let targets = client.map { clients[$0] != nil ? [$0] : [] } ?? Array(clients.keys)
             guard !targets.isEmpty else { return (nil, 0) }
@@ -145,7 +147,7 @@ final class BrowserBridge: @unchecked Sendable {
             var msg = body
             msg["id"] = rid
             guard let data = try? JSONSerialization.data(withJSONObject: msg) else { return (nil, 0) }
-            let p = Pending(waiting: Set(targets))
+            let p = Pending(waiting: Set(targets), closest: closest)
             pending[rid] = p
             for t in targets {
                 let meta = NWProtocolWebSocket.Metadata(opcode: .text)
@@ -181,7 +183,7 @@ final class BrowserBridge: @unchecked Sendable {
         let r = request(["type": "hit", "x": p.x, "y": p.y, "url": url,
                          "area": ["x": area.minX, "y": area.minY, "w": area.width, "h": area.height],
                          "window": ["x": window.minX, "y": window.minY, "w": window.width, "h": window.height]],
-                        timeout: 0.25)
+                        closest: true, timeout: 0.25)
         return r.flatMap { Self.chain($0, area: area) }
     }
 

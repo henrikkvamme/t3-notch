@@ -87,12 +87,13 @@ const sameURL = (a, b) => {
 };
 
 // The tab the point is in: active, with the page's URL, in the window whose bounds best
-// match the window under the pointer.
+// match the window under the pointer. The score (distance in points) goes back to the app,
+// which takes the closest answer when two browsers show the same page.
 async function findTab(msg) {
   const tabs = await chrome.tabs.query({ active: true });
   const candidates = tabs.filter((t) => t.url && sameURL(t.url, msg.url));
   if (candidates.length === 0) return null;
-  if (candidates.length === 1 || !msg.window) return candidates[0];
+  if (!msg.window) return { tab: candidates[0], score: null };
   let best = null, bestScore = Infinity;
   for (const t of candidates) {
     const w = await chrome.windows.get(t.windowId);
@@ -100,18 +101,19 @@ async function findTab(msg) {
       Math.abs(w.width - msg.window.w) + Math.abs(w.height - msg.window.h);
     if (score < bestScore) { best = t; bestScore = score; }
   }
-  return best;
+  return { tab: best, score: bestScore };
 }
 
 async function hit(msg) {
-  const tab = await findTab(msg);
-  if (!tab) return null;
+  const found = await findTab(msg);
+  if (!found) return null;
+  const { tab, score } = found;
   // The point in CSS pixels: the web area is the viewport, so scale its points to the
   // page's width.
   return run(tab.id, (px, py, areaWidth) => {
     const s = innerWidth / areaWidth;
     return globalThis.__t3n?.hit(px * s, py * s);
-  }, [msg.x - msg.area.x, msg.y - msg.area.y, msg.area.w]).then((r) => (r ? { ...r, tab: tab.id } : null));
+  }, [msg.x - msg.area.x, msg.y - msg.area.y, msg.area.w]).then((r) => (r ? { ...r, tab: tab.id, score } : null));
 }
 
 // Runs `func` in the tab's top frame, injecting page.js first if it is not there yet.
