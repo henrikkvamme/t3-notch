@@ -21,7 +21,7 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 - **Live replies.** While the agent works, the island shows its thinking (and, with **Show Commands While
   Working** on in settings, its current step: `$ swift test`, `Editing Store.swift`). Then the reply streams in, sliding the old one out as it blurs in.
   Images the agent puts in its reply (screenshots, charts) show in place; click one to open it.
-- **Queue or steer.** ⏎ queues your message after the running turn; ⌘⏎ steers the turn that is running.
+- **Steer or queue.** ⏎ steers the turn that is running; ⌘⏎ queues your message after it. A setting swaps the two.
 - **Pick the chat.** ⌘K opens a list that mirrors T3's sidebar: pinned, then active, then the rest, with
   project, status, time, branch and provider. With no chat picked, the island opens on this list.
 - **Clip the screen.** ⌘P freezes the screen. Hover to pick a UI element (scroll to grow or shrink it), or drag
@@ -129,8 +129,8 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | Key | Action |
 | --- | --- |
 | ⌥Space | Show or hide the island (rebind in settings) |
-| ⏎ | Send, or queue after the running turn. Accepts a pending approval when the input is empty |
-| ⌘⏎ | Steer the running turn. Accepts an approval for the session when one is showing |
+| ⏎ | Send, steering the running turn (or queue after it, if set so in settings). Accepts a pending approval when the input is empty |
+| ⌘⏎ | Send the other way: queue after the running turn (or steer). Accepts an approval for the session when one is showing |
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Pick the chat (rebind in settings) |
 | ⌘P | Clip part of the screen into the next message |

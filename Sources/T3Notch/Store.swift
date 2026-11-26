@@ -737,6 +737,13 @@ enum Settings {
     }
 
     /// Peek at the focused chat when the pointer moves onto the notch. On by default.
+    /// ⏎ steers the running turn and ⌘⏎ queues after it. Off: the other way round. On by
+    /// default. When no turn runs, both start one.
+    static var enterSteers: Bool {
+        get { UserDefaults.standard.object(forKey: "enterSteers") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "enterSteers") }
+    }
+
     static var expandOnHover: Bool {
         get { UserDefaults.standard.object(forKey: "expandOnHover") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
