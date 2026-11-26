@@ -26,6 +26,8 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
   project, status, time, branch and provider. With no chat picked, the island opens on this list.
 - **Clip the screen.** ⌘P freezes the screen. Hover to pick a UI element (scroll to grow or shrink it), or drag
   a rectangle, and the clip is attached to your next message as an image.
+- **Comment on anything.** Hold ⌃⌥ in any app and the element under the pointer lights up. Click it, type a
+  comment, and ⏎ sends the picture of it with your comment to the chat. The island does not have to be open.
 - **Answer approvals.** When the agent asks for permission or has a question, the island opens with the
   request. ⏎ accepts, ⌘⏎ accepts for the session, ⎋ declines.
 - **Hand off to T3.** ⌘O opens the chat in T3 and carries your draft text and clips into T3's chat box.
@@ -134,6 +136,7 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | ⎋ | Decline a pending approval, otherwise close |
 | ⌘K | Pick the chat (rebind in settings) |
 | ⌘P | Clip part of the screen into the next message |
+| Hold ⌃⌥ | Select mode, from any app: point, click, comment, ⏎ (turn off in settings) |
 | ⌘O | Open the chat in T3, taking the draft and clips along (rebind in settings) |
 | ⌘. | Stop the running agent |
 | ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list, or scroll the reply |
@@ -155,6 +158,37 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 Clipping needs **Screen Recording**. Element picking also needs **Accessibility**; without it, hovering picks
 whole windows. When a permission is missing, the island shows a button that opens the exact System Settings
 list, so only the toggle is left.
+
+### Select mode
+
+Hold **⌃⌥** in any app. The element under the pointer gets an outline that follows the pointer. The app keeps
+the keyboard and nothing is sent. Let go, and the outline goes away.
+
+| While you hold ⌃⌥ | |
+| --- | --- |
+| Scroll | Grow the selection out to its parent, or shrink it back |
+| Click | Keep the selection and open a comment field beside it |
+| Drag | Select a rectangle, then comment on it |
+
+After the click you can let go of the keys. The screen is frozen, and the comment field has the keyboard.
+
+| In the comment field | |
+| --- | --- |
+| ⏎ | Send the selection and the comment to the chat. ⌘⏎ steers the running turn |
+| ⇧⏎ | New line |
+| ⎋ | Back one step: to pointing if you still hold ⌃⌥, else out |
+| ⌃K ⌃P / ⌃J ⌃N | Select the parent / the child |
+| ⌃H / ⌃L | Select the previous / the next sibling |
+| ⇥ / ⇧⇥ | Send to the next / the previous chat |
+| Click, drag, ⌃⌥ scroll | Select something else. The comment stays |
+
+The comment goes to the chat you last opened in T3 or picked in the island; its name is under the field. The
+agent gets the picture, the app, the element and its text, and in a browser with the extension the page
+element. Text you selected in the app is the selection while the pointer is on it.
+
+Select mode shows after both keys are down for 0.15 s with nothing else pressed, so an app's own ⌃⌥ shortcut
+still works. It is off while VoiceOver runs and while a password field has the keyboard. It needs
+**Accessibility** and **Screen Recording**.
 
 ### Status dot
 

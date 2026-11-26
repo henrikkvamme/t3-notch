@@ -69,7 +69,7 @@ enum Onboarding {
     static let t3Download = URL(string: "https://github.com/pingdotgg/t3code/releases/latest")!
 
     /// Whether select mode can run now. Without its permissions the Select step still takes
-    /// the tap; select mode asks for them when it is first used.
+    /// the hold; select mode asks for them when it is first used.
     static var canSelect: Bool { Permission.screenRecording.isGranted && Permission.accessibility.isGranted }
 
     static func openT3() {
@@ -105,6 +105,7 @@ extension PanelController {
     /// Opens the island on the tour, at `step`.
     func startOnboarding(at step: OnboardingStep = .welcome) {
         Onboarding.begin()
+        Chime.prepare()
         onboardingHidOnce = false
         onboardingNote = 0
         ui.onboardingKeysLit = false
@@ -115,13 +116,14 @@ extension PanelController {
 
     /// Moves to `step`, saves it so a relaunch resumes there, and starts what the step waits for.
     func go(to step: OnboardingStep) {
-        // The tap is off (its setting, VoiceOver, a password field): nothing to teach.
+        // The hold is off (its setting, VoiceOver, a password field): nothing to teach.
         if step == .select, !SelectTrigger.enabled { go(to: step.next); return }
         Onboarding.save(step)
         onboardingTask?.cancel()
         withAnimation(Motion.content) {
             ui.onboarding = step
             ui.onboardingKeysLit = false
+            ui.onboardingScrolled = false
             ui.onboardingTried = []
         }
         switch step {
@@ -225,25 +227,50 @@ extension PanelController {
         }
     }
 
-    /// The Select step: the tap lights its keys, then starts the real select mode.
-    func onboardingSelectTapped() {
-        guard !ui.onboardingKeysLit else { return }
-        celebrate()
-        let real = Onboarding.canSelect
+    /// The Select step: ⌃⌥ is held, which lights the keys. `started` says whether the real
+    /// select mode shows now. It does not without its permissions, or when macOS refuses the
+    /// event tap; then there is nothing to try, and the tour moves on once the words are read.
+    func onboardingSelectHeld(started: Bool) {
+        guard ui.onboarding == .select else { return }
         onboardingTask?.cancel()
+        if !ui.onboardingKeysLit { celebrate() }
+        guard !started else { return } // the click moves the tour on, a release asks again
         onboardingTask = Task { [weak self] in
-            // The wave runs out first. With nothing to try, the words get time to be read.
-            try? await Task.sleep(for: .milliseconds(real ? 850 : 1800))
+            try? await Task.sleep(for: .milliseconds(1800))
             guard let self, !Task.isCancelled, self.ui.onboarding == .select else { return }
-            if real { self.startSelecting(inTour: true) } else { self.go(to: OnboardingStep.select.next) }
+            self.go(to: OnboardingStep.select.next)
         }
     }
 
-    /// Select mode ended during the Select step, with or without picks.
-    func onboardingSelectEnded() {
+    /// The Select step: a scroll changed the level, so the step stops asking for one.
+    func onboardingSelectScrolled() {
+        guard ui.onboarding == .select, !ui.onboardingScrolled else { return }
+        withAnimation(Motion.content) { ui.onboardingScrolled = true }
+    }
+
+    /// Select mode ended during the Select step. After a click the comment field was open, so
+    /// the lesson is done. A hold let go without a click starts the step again.
+    func onboardingSelectEnded(clicked: Bool) {
         guard ui.onboarding == .select else { return }
+        guard clicked else {
+            withAnimation(Motion.content) {
+                ui.onboardingKeysLit = false
+                ui.onboardingScrolled = false
+            }
+            return
+        }
         expand()
         go(to: OnboardingStep.select.next)
+    }
+
+    /// The island folds away during the Select step. Nothing the step waits for may happen
+    /// behind it, so the step starts again when the island is back. A running select mode
+    /// goes on: its end decides.
+    func onboardingSelectHidden(selecting: Bool) {
+        guard ui.onboarding == .select, !selecting else { return }
+        onboardingTask?.cancel()
+        ui.onboardingKeysLit = false
+        ui.onboardingScrolled = false
     }
 
     /// One of the keys card's shortcuts was pressed. It ticks off instead of acting, and the
@@ -417,10 +444,14 @@ struct OnboardingView: View {
 
     private var select: some View {
         let lit = ui.onboardingKeysLit
+        let real = Onboarding.canSelect
         return keyStep(SelectTrigger.keycaps,
-                       title: lit ? (Onboarding.canSelect ? "Now pick something" : "That starts select mode")
-                                  : "Select anything on screen",
-                       caption: lit ? "What you pick goes into your message." : "Tap both keys at once, in any app.")
+                       title: !lit ? "Comment on anything on screen"
+                           : real ? "Now point at something" : "That shows select mode",
+                       caption: !lit ? "Hold both keys, in any app."
+                           : !real ? "It asks for its permissions when you first use it."
+                           : ui.onboardingScrolled ? "Click it to comment."
+                           : "Scroll to select more or less. Click it to comment.")
     }
 
     private var tips: some View {
@@ -860,26 +891,41 @@ extension View {
 enum Chime {
     private static var sounds: [String: NSSound] = [:]
     /// D5, then up a major pentatonic scale.
-    private static let base = 587.33
-    private static let scale = [0, 2, 4, 7, 9]
+    nonisolated private static let base = 587.33
+    nonisolated private static let scale = [0, 2, 4, 7, 9]
 
-    private static func frequency(_ step: Int) -> Double {
+    nonisolated private static func frequency(_ step: Int) -> Double {
         let semitones = scale[step % scale.count] + 12 * (step / scale.count)
         return base * pow(2, Double(min(semitones, 24)) / 12)
     }
 
+    nonisolated private static func noteData(_ index: Int) -> Data {
+        wave([(frequency(index), 0)], decay: 0.11, length: 0.55)
+    }
+
+    nonisolated private static func resolveData() -> Data {
+        wave([(base, 0), (base * 1.5, 0.055), (base * 2, 0.11), (base * 2.52, 0.165)], decay: 0.42, length: 1.9)
+    }
+
+    /// Makes the tour's sounds off the main thread, so the first success does not wait on them.
+    static func prepare() {
+        guard sounds.isEmpty else { return }
+        Task {
+            let made = await Task.detached(priority: .utility) {
+                (0..<8).map { ("note \($0)", noteData($0)) } + [("resolve", resolveData())]
+            }.value
+            for (key, data) in made where sounds[key] == nil { sounds[key] = NSSound(data: data) }
+        }
+    }
+
     /// The `index`th note of the tour.
     static func note(_ index: Int) {
-        play("note \(index)", volume: 0.34) {
-            wave([(frequency(index), 0)], decay: 0.11, length: 0.55)
-        }
+        play("note \(index)", volume: 0.34) { noteData(index) }
     }
 
     /// The end of the tour: a rising D major chord.
     static func resolve() {
-        play("resolve", volume: 0.3) {
-            wave([(base, 0), (base * 1.5, 0.055), (base * 2, 0.11), (base * 2.52, 0.165)], decay: 0.42, length: 1.9)
-        }
+        play("resolve", volume: 0.3) { resolveData() }
     }
 
     private static func play(_ key: String, volume: Float, make: () -> Data) {
@@ -892,7 +938,7 @@ enum Chime {
 
     /// A WAV file of mallet tones: each a sine with a short-lived octave above it, a 4 ms
     /// attack and an exponential decay.
-    static func wave(_ tones: [(frequency: Double, start: Double)], decay: Double, length: Double) -> Data {
+    nonisolated static func wave(_ tones: [(frequency: Double, start: Double)], decay: Double, length: Double) -> Data {
         let rate = 44_100.0
         let count = Int(length * rate)
         var samples = [Double](repeating: 0, count: count)

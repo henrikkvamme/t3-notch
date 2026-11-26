@@ -1,30 +1,41 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Calls `onTap` for a clean tap of ⌃⌥ anywhere: both keys down, then both up within
-/// 400 ms, with no other key, modifier, click or scroll in between. Holding ⌃⌥ for an app's
-/// own shortcut never fires it. Off while VoiceOver runs (⌃⌥ is its VO key) and while a
-/// password field has secure input.
+/// Reports while ⌃⌥ is held in any app. `onHold(true)` comes once both keys have been down
+/// for `delay` with no other key, modifier, click or scroll, so a ⌃⌥ chord for an app's own
+/// shortcut never shows select mode. `onHold(false)` comes when a key goes up or something
+/// else is pressed. Off while VoiceOver runs (⌃⌥ is its VO key) and while a password field
+/// has secure input.
 ///
-/// Global monitors see other apps' events only with Accessibility, which clip mode needs too.
+/// Global monitors see other apps' events only with Accessibility, which select mode needs too.
 @MainActor
 final class SelectTrigger {
-    /// Longest press that still counts as a tap.
-    static let maxTap: TimeInterval = 0.4
-    /// The keys of the tap, as the welcome tour draws them. Change them with `flagsChanged`.
+    /// How long both keys must stay down before select mode shows.
+    static let delay: TimeInterval = 0.15
+    /// The keys of the hold, as the welcome tour draws them. Change them with `flagsChanged`.
     static let keycaps = [KeyCap(symbol: "⌃", name: "control"), KeyCap(symbol: "⌥", name: "option")]
 
-    private let onTap: () -> Void
+    private let onHold: (Bool) -> Void
     private var monitors: [Any] = []
-    private var detector = TapDetector(maxTap: SelectTrigger.maxTap)
+    private var detector = HoldDetector()
+    /// What `onHold` was last told.
+    private var reported = false
+    /// Bumped by every change, so a pending start that a newer change replaced is dropped.
+    private var generation = 0
 
-    init(onTap: @escaping () -> Void) {
-        self.onTap = onTap
+    init(onHold: @escaping (Bool) -> Void) {
+        self.onHold = onHold
         let flags: (NSEvent) -> Void = { [weak self] e in
-            MainActor.assumeIsolated { self?.flagsChanged(e) }
+            MainActor.assumeIsolated { self?.flagsChanged(e.modifierFlags) }
         }
-        let other: (NSEvent) -> Void = { [weak self] _ in
-            MainActor.assumeIsolated { self?.detector.interrupt() }
+        let other: (NSEvent) -> Void = { [weak self] e in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Once select mode shows, the left button and the scroll are its own.
+                if self.reported, [.leftMouseDown, .scrollWheel].contains(e.type) { return }
+                guard self.detector.interrupt() else { return }
+                self.changed()
+            }
         }
         let spoilers: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
         monitors = [
@@ -35,13 +46,38 @@ final class SelectTrigger {
         ]
     }
 
-    private func flagsChanged(_ e: NSEvent) {
-        let mods = e.modifierFlags.intersection([.control, .option, .command, .shift, .function])
+    /// Select mode ended by itself (sent, or Esc) while the keys may still be down. If they
+    /// are, the hold goes on: select mode shows again at once.
+    func resume() {
+        detector = HoldDetector()
+        generation += 1
+        reported = false
+        flagsChanged(NSEvent.modifierFlags, delay: 0)
+    }
+
+    private func flagsChanged(_ flags: NSEvent.ModifierFlags, delay: TimeInterval = SelectTrigger.delay) {
+        let mods = flags.intersection([.control, .option, .command, .shift, .function])
         guard detector.update(control: mods.contains(.control), option: mods.contains(.option),
-                              other: !mods.subtracting([.control, .option]).isEmpty, at: e.timestamp)
-        else { return }
-        guard Self.enabled else { return }
-        onTap()
+                              other: !mods.subtracting([.control, .option]).isEmpty) else { return }
+        changed(delay: delay)
+    }
+
+    /// `detector.held` changed: start after the delay, or stop now.
+    private func changed(delay: TimeInterval = SelectTrigger.delay) {
+        generation += 1
+        guard detector.held else { report(false); return }
+        guard delay > 0 else { report(Self.enabled); return }
+        let started = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.generation == started, self.detector.held, Self.enabled else { return }
+            self.report(true)
+        }
+    }
+
+    private func report(_ held: Bool) {
+        guard held != reported else { return }
+        reported = held
+        onHold(held)
     }
 
     /// Off by setting, under VoiceOver, and while secure input is on.
@@ -50,34 +86,27 @@ final class SelectTrigger {
     }
 }
 
-/// The tap state machine, kept free of AppKit so it can be tested on its own.
-struct TapDetector {
-    let maxTap: TimeInterval
-    private var downAt: TimeInterval?
-    /// Something else happened since the keys went down: no tap until all are up.
+/// The hold state machine, kept free of AppKit so it can be tested on its own.
+struct HoldDetector {
+    /// ⌃ and ⌥ are both down, with nothing else pressed since they went down.
+    private(set) var held = false
+    /// Something else happened while the keys were down: no hold until all are up.
     private var spoiled = false
 
-    init(maxTap: TimeInterval) { self.maxTap = maxTap }
-
-    /// Feeds one modifier change. Returns true when it completes a tap.
-    mutating func update(control: Bool, option: Bool, other: Bool, at time: TimeInterval) -> Bool {
+    /// Feeds the modifiers that are down now. Returns true when `held` changed.
+    mutating func update(control: Bool, option: Bool, other: Bool) -> Bool {
         if other { spoiled = true }
-        if control && option && !other {
-            if downAt == nil { downAt = time }
-            return false
-        }
-        if !control && !option && !other {
-            defer { downAt = nil; spoiled = false }
-            guard let start = downAt, !spoiled else { return false }
-            return time - start <= maxTap
-        }
-        // One of the two released while the other is held: keep waiting for both up, but a
-        // key pressed again later must not restart the clock.
-        return false
+        if !control && !option && !other { spoiled = false }
+        let now = control && option && !other && !spoiled
+        defer { held = now }
+        return now != held
     }
 
-    /// A key, click or scroll while the modifiers are down cancels the tap.
-    mutating func interrupt() {
-        if downAt != nil { spoiled = true }
+    /// A key, click or scroll while the keys are down ends the hold. Returns true when it did.
+    mutating func interrupt() -> Bool {
+        guard held else { return false }
+        spoiled = true
+        held = false
+        return true
     }
 }

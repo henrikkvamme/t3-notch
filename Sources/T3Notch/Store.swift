@@ -615,7 +615,12 @@ final class Store {
 
     /// The focused chat's environment and its id there.
     private var target: (environmentId: String, threadId: String, rpc: RPCClient)? {
-        guard let t = targetThread, let env = t["environmentId"].string, let id = t["id"].string,
+        targetThreadId.flatMap(target(of:))
+    }
+
+    /// The same for the chat with this key.
+    private func target(of key: String) -> (environmentId: String, threadId: String, rpc: RPCClient)? {
+        guard let t = threads[key], let env = t["environmentId"].string, let id = t["id"].string,
               let rpc = rpc(for: env), rpc.isOpen else { return nil }
         return (env, id, rpc)
     }
@@ -831,28 +836,32 @@ final class Store {
     /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
     /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
     /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
-    func send(_ text: String, steer: Bool = false, clips: [Clip] = []) async {
+    /// Goes to the chat `to`, or to the island's chat without one. Returns false when this
+    /// message did not go out; `lastSendError` then says why.
+    @discardableResult
+    func send(_ text: String, steer: Bool = false, clips: [Clip] = [], to: String? = nil) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !clips.isEmpty else { return }
-        guard let key = targetThreadId else {
+        guard !trimmed.isEmpty || !clips.isEmpty else { return true }
+        guard let key = to ?? targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
                 : "No thread to send to. Pin one in T3 or pick one with ⌘K."
             if threads.isEmpty { reconnectNow() }
-            return
+            return false
         }
         if Store.demo {
             onDemoSend?(trimmed, steer, clips.count)
-            return
+            return true
         }
-        guard let target else {
-            lastSendError = "\(environmentLabel(for: targetThread) ?? "T3") is not connected. Trying again…"
-            linked[targetThread?["environmentId"].string ?? ""]?.reconnectNow()
-            return
+        guard let target = target(of: key) else {
+            lastSendError = "\(environmentLabel(for: threads[key]) ?? "T3") is not connected. Trying again…"
+            linked[threads[key]?["environmentId"].string ?? ""]?.reconnectNow()
+            return false
         }
         let threadId = target.threadId
         let id = UUID().uuidString.lowercased()
         lastSendError = nil
+        var sent = false
         var command: [String: JSON] = [
             "type": "message.dispatch",
             "commandId": .string(id),
@@ -876,10 +885,12 @@ final class Store {
             }
             _ = try await target.rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = key
+            sent = true
         } catch {
             handleCommandError(error)
         }
         syncThreadSubscription()
+        return sent
     }
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
@@ -1104,7 +1115,7 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
     }
 
-    /// A tap of ⌃⌥ from any app starts select mode. On by default.
+    /// Holding ⌃⌥ in any app shows select mode. On by default.
     static var controlOptionSelect: Bool {
         get { UserDefaults.standard.object(forKey: "controlOptionSelect") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "controlOptionSelect") }
