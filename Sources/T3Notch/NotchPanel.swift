@@ -371,7 +371,9 @@ final class PanelController {
         // A selection's comment is open: it sits just above the message field, the lowest one.
         // A comment that just closed can still be in the view while it fades: then the message
         // field, the lowest, is the one.
-        if store.pendingRequest == nil, let fields = panel.contentView?.editableTexts, fields.count > 1 {
+        // A question's own answer field sits above both and keeps the old rule when no comment is open.
+        if ui.editingClip != nil || store.pendingRequest == nil,
+           let fields = panel.contentView?.editableTexts, fields.count > 1 {
             let byHeight = fields.sorted { $0.convert($0.bounds, to: nil).midY < $1.convert($1.bounds, to: nil).midY }
             target = byHeight[ui.editingClip != nil ? 1 : 0]
         }
@@ -404,6 +406,10 @@ final class PanelController {
         if Settings.openInT3Key.matches(event) { // ⌘O by default: open in T3, hide the island
             openInT3(); return true
         }
+        // A selection's comment is open: ⏎ and ⌘Z are that field's keys, not the approval's or
+        // the clip row's.
+        let commenting = ui.editingClip.map { id in ui.clips.contains { $0.id == id } } ?? false
+        if commenting, (event.keyCode == 36 && !cmd) || event.keyCode == 6 { return false }
         switch event.keyCode {
         case 53: // Esc
             if ui.pickerOpen { setPicker(false); return true }

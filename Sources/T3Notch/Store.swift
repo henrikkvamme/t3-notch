@@ -403,6 +403,8 @@ final class Store {
         rpc.close()
         shellStreamId = nil
         if threadStreamRpc === rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
+        // A snapshot that was only partly in must not end by its timer.
+        if let env = environmentId { snapshotEndTasks.removeValue(forKey: env)?.cancel() }
         // The chats stay in the list while the socket comes back: the next shell snapshot
         // replaces them (`markStale`). Linked environments keep their own sockets; they need
         // the local server only to pair.
@@ -502,7 +504,9 @@ final class Store {
     private func environmentClosed(_ env: LinkedEnvironment) {
         if threadStreamRpc === env.rpc { threadStreamId = nil; threadStreamRpc = nil; subscribedThreadId = nil }
         env.shellStreamId = nil
-        // Its chats stay in the list; the environment connects again by itself.
+        // Its chats stay in the list; the environment connects again by itself. A snapshot
+        // that was only partly in must not end by its timer.
+        snapshotEndTasks.removeValue(forKey: env.id)?.cancel()
     }
 
     /// Removes an environment's chats and projects from the list.
