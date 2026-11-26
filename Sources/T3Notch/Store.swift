@@ -115,6 +115,8 @@ final class Store {
 
     /// The chat that T3's window shows, read from its title, and when it came there.
     private var shownInT3: (id: String, at: Date)?
+    /// The chat T3's window shows now, as far as its title says.
+    var chatShownInT3: String? { shownInT3?.id }
     private var t3WindowTitle: String?
     private var t3WindowTimer: Timer?
     private var readingT3Window = false
@@ -1339,6 +1341,13 @@ enum Settings {
     static var enterSteers: Bool {
         get { UserDefaults.standard.object(forKey: "enterSteers") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "enterSteers") }
+    }
+
+    /// The island's message and T3's message field are one draft while both show the same
+    /// chat. On by default.
+    static var syncDraft: Bool {
+        get { UserDefaults.standard.object(forKey: "syncDraft") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "syncDraft") }
     }
 
     static var expandOnHover: Bool {

@@ -170,6 +170,7 @@ final class PanelController {
         present()
         panel.makeKey()
         animateMode(.expanded, afterLayout: wasHidden)
+        startDraftSync()
         // No chat focused: open straight onto the list of chats.
         if store.targetThreadId == nil && store.connection == .connected && !ui.pickerOpen && ui.onboarding == nil {
             setPicker(true)
@@ -227,6 +228,7 @@ final class PanelController {
     /// anyway (opening the thread in T3), so the two activations don't fight.
     func hide(returnFocus shouldReturn: Bool = true) {
         peekHideTask?.cancel()
+        stopDraftSync()
         onboardingSelectHidden(selecting: clipper != nil)
         if shouldReturn { returnFocus() } else { panel.resignKey() }
         withAnimation(Motion.close) {
@@ -242,6 +244,103 @@ final class PanelController {
             try? await Task.sleep(for: .milliseconds(450))
             guard let self, !Task.isCancelled, self.ui.mode == .hidden else { return }
             self.panel.orderOut(nil)
+        }
+    }
+
+    // MARK: - T3's own draft
+
+    private let composer = T3Composer()
+    private var draftSyncTimer: Timer?
+    private var draftSyncBusy = false
+    /// The text of T3's message field when the island and T3 last agreed; nil while they do
+    /// not share a draft (T3 shows another chat, or both had their own text).
+    private var syncedDraft: String?
+    private let draftLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.t3notch.app", category: "draft")
+
+    /// T3's message field for the island's chat: only while T3's window shows that chat.
+    private var composerTarget: (pid: pid_t, title: String)? {
+        guard Settings.syncDraft, Permission.accessibility.isGranted, ui.onboarding == nil, !Store.demo,
+              let id = store.targetThreadId, store.chatShownInT3 == id,
+              let title = store.targetTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
+              let pid = store.runtime?.app?.processIdentifier else { return nil }
+        return (pid, title)
+    }
+
+    /// Two drafts are one when only the white space at the end differs.
+    private static func sameDraft(_ a: String, _ b: String) -> Bool {
+        func trimmed(_ s: String) -> Substring { s[..<(s.lastIndex(where: { !$0.isWhitespace }).map { s.index(after: $0) } ?? s.startIndex)] }
+        return trimmed(a) == trimmed(b)
+    }
+
+    /// While the island is open on the chat T3 shows, the island's message and T3's message
+    /// field are one draft: what you type in one is in the other within half a second.
+    private func startDraftSync() {
+        guard draftSyncTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.syncDraft() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        draftSyncTimer = timer
+        syncDraft()
+    }
+
+    /// The island closes. A draft that T3's field also has leaves the island: it would keep
+    /// the island on this chat, and T3 has it.
+    private func stopDraftSync() {
+        draftSyncTimer?.invalidate()
+        draftSyncTimer = nil
+        guard let target = composerTarget, syncedDraft != nil, ui.clips.isEmpty, ui.sending == 0 else { syncedDraft = nil; return }
+        let mine = ui.draft, synced = syncedDraft
+        syncedDraft = nil
+        guard !mine.isEmpty else { return }
+        // T3 has it already: no write, which would move the cursor in T3's field.
+        if let synced, Self.sameDraft(mine, synced) {
+            ui.draft = ""
+            return
+        }
+        composer.write(mine, pid: target.pid, chatTitle: target.title) { [weak self] now in
+            guard let self, let now, Self.sameDraft(now, mine), self.ui.mode != .expanded, self.ui.draft == mine else { return }
+            self.ui.draft = ""
+            self.store.focusLastOpened()
+        }
+    }
+
+    private func syncDraft() {
+        guard !draftSyncBusy else { return }
+        guard let target = composerTarget else { syncedDraft = nil; return }
+        let mine = ui.draft
+        draftSyncBusy = true
+        // You typed in the island: T3's field takes it.
+        if let synced = syncedDraft, !Self.sameDraft(mine, synced) {
+            composer.write(mine, pid: target.pid, chatTitle: target.title) { [weak self] now in
+                guard let self else { return }
+                self.draftSyncBusy = false
+                self.syncedDraft = now
+                if let now, !Self.sameDraft(now, mine) {
+                    self.draftLog.notice("T3 keeps the draft differently: wrote \(mine.count, privacy: .public), has \(now.count, privacy: .public)")
+                }
+            }
+            return
+        }
+        composer.read(pid: target.pid, chatTitle: target.title) { [weak self] text in
+            guard let self else { return }
+            self.draftSyncBusy = false
+            // No field, T3 moved to another chat, or you typed while T3 answered.
+            guard let text, self.composerTarget?.title == target.title, self.ui.draft == mine else {
+                if text == nil { self.syncedDraft = nil }
+                return
+            }
+            if let synced = self.syncedDraft {
+                // You typed in T3: the island takes it.
+                if !Self.sameDraft(text, synced) { self.ui.draft = text; self.syncedDraft = text }
+            } else if mine.isEmpty || Self.sameDraft(text, mine) {
+                // The island had nothing of its own: T3's draft is the draft.
+                if !Self.sameDraft(text, mine) { self.ui.draft = text }
+                self.syncedDraft = text
+            } else if text.isEmpty {
+                self.syncedDraft = "" // T3 had nothing: the next round gives it the island's text
+            }
+            // Both had their own text: they stay apart, so nothing is lost.
         }
     }
 
@@ -484,6 +583,11 @@ final class PanelController {
             store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
             return
         }
+        // The message leaves from the island, so T3's field must not keep a copy of it.
+        if syncedDraft != nil, let target = composerTarget {
+            composer.write("", pid: target.pid, chatTitle: target.title)
+        }
+        syncedDraft = nil
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         ui.sending += 1
         let to = store.targetThreadId

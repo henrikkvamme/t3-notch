@@ -148,6 +148,9 @@ final class SettingsModel {
     var controlOptionSelect = Settings.controlOptionSelect {
         didSet { Settings.controlOptionSelect = controlOptionSelect }
     }
+    var syncDraft = Settings.syncDraft {
+        didSet { Settings.syncDraft = syncDraft }
+    }
     var enterSteers = Settings.enterSteers {
         didSet { Settings.enterSteers = enterSteers }
     }
@@ -170,6 +173,7 @@ final class SettingsModel {
         expandOnHover = Settings.expandOnHover
         controlOptionSelect = Settings.controlOptionSelect
         enterSteers = Settings.enterSteers
+        syncDraft = Settings.syncDraft
         browserConnected = BrowserBridge.shared.isConnected
         launchAtLogin = SMAppService.mainApp.status == .enabled
         upToDate = false
@@ -297,6 +301,9 @@ private struct SettingsView: View {
             divider
             row("⏎ steers the running turn", caption: model.enterSteers ? "⌘⏎ queues after it" : "⏎ queues after it; ⌘⏎ steers",
                 isOn: $model.enterSteers)
+            divider
+            row("Share the draft with T3", caption: "What you type in T3 is in the island, and the other way",
+                isOn: $model.syncDraft)
             divider
             row("Show when chat finishes", caption: "Only applies when T3 is not in view",
                 isOn: $model.showWhenChatFinishes)
