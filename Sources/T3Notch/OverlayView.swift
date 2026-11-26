@@ -19,6 +19,9 @@ final class OverlayUIState {
     var landing = false
     /// That place in the island's window, top-left origin.
     var landingSlot: CGRect?
+    /// The peek came from the pointer on the notch: it shows the chat's row only, as T3's
+    /// sidebar does, and so covers little. A chat that needs you shows the full peek.
+    var peekCompact = false
     /// The selection whose comment is open under the row.
     var editingClip: UUID?
     var draft = ""
@@ -101,7 +104,8 @@ struct OverlayView: View {
     @State private var hoveredClip: UUID?
 
     private var shown: Bool { ui.mode != .hidden }
-    private var openWidth: CGFloat { ui.mode == .peek ? 520 : 680 }
+    private var compact: Bool { ui.mode == .peek && ui.peekCompact && store.pendingRequest == nil }
+    private var openWidth: CGFloat { ui.mode == .peek ? (compact ? 340 : 520) : 680 }
     /// The real notch's bottom corners are about this round.
     private var notchRadius: CGFloat { ui.hasRealNotch ? 10 : 12 }
 
@@ -161,6 +165,11 @@ struct OverlayView: View {
                         .transition(.blurReplace)
                 } else if store.connection != .connected {
                     connectionLine.transition(.blurReplace)
+                } else if compact, let thread = store.targetThread {
+                    // The same facts as the chat's row in T3's sidebar.
+                    ThreadRow(thread: thread, project: store.project(for: thread), now: Date())
+                        .padding(.horizontal, -10).padding(.vertical, -7)
+                        .transition(.blurReplace)
                 } else {
                     header
                     if ui.pickerOpen && ui.mode == .expanded {

@@ -181,8 +181,11 @@ final class PanelController {
     }
 
     /// Shows the reply without taking focus; fades after a delay unless hovered.
-    func peek(autoHide: Bool) {
+    func peek(autoHide: Bool, compact: Bool = false) {
+        // A chat that needs you, while the pointer's small peek shows: show the full one.
+        if ui.mode == .peek, !compact, ui.peekCompact { withAnimation(Motion.open) { ui.peekCompact = false } }
         guard ui.mode == .hidden else { return }
+        ui.peekCompact = compact
         place(on: NotchGeometry.screenUnderMouse())
         present()
         animateMode(.peek, afterLayout: true)
@@ -448,7 +451,7 @@ final class PanelController {
         guard Settings.expandOnHover, store.targetThread != nil, !ui.notchScreenFullscreen else { return }
         let g = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
         if NSMouseInRect(p, g.notchRect.insetBy(dx: -8, dy: 0), false) {
-            peek(autoHide: false)
+            peek(autoHide: false, compact: true)
             schedulePeekHide(after: 1.5) // stays while hovered
         }
     }
