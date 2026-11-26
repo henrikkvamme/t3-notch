@@ -85,7 +85,8 @@ struct PickContext: Sendable {
         page = PageElement(selector: Self.clip(selector, 1000), tag: Self.clip(tag, 40), role: str("role", 60),
                            name: str("name", 300), text: str("text", 4000), value: str("value", 2000),
                            html: str("html", 6000), attributes: attributes,
-                           components: (d["components"] as? [String] ?? []).prefix(8).map { Self.clip($0, 80) },
+                           // A production build has names such as "tr" and "Pj": they say nothing.
+                           components: (d["components"] as? [String] ?? []).filter { $0.count > 2 }.prefix(8).map { Self.clip($0, 80) },
                            source: str("source", 500))
         if let u = d["url"] as? String { url = PickReader.sanitize(u) }
         let pick = PickElement(role: page!.role.map { "\(tag)[\($0)]" } ?? tag, name: page!.name, value: page!.value,
@@ -558,14 +559,15 @@ extension PickContext {
             if !path.isEmpty { el["path"] = .string(path.map(\.label).joined(separator: " > ")) }
             o["element"] = .object(el)
             if let p = page {
-                var d: [String: JSON] = ["selector": .string(p.selector), "tag": .string(p.tag)]
+                // The record has the selector, the components and the source as fields of its own.
+                var d: [String: JSON] = html ? ["selector": .string(p.selector), "tag": .string(p.tag)] : [:]
                 if let s = p.role { d["role"] = .string(s) }
                 if let s = p.name { d["name"] = .string(s) }
                 if let s = p.text { d["text"] = .string(s) }
                 if let s = p.value { d["value"] = .string(s) }
                 if html, let s = p.html { d["html"] = .string(s) }
-                if !p.components.isEmpty { d["components"] = .array(p.components.map { .string($0) }) }
-                if let s = p.source { d["source"] = .string(s) }
+                if html, !p.components.isEmpty { d["components"] = .array(p.components.map { .string($0) }) }
+                if html, let s = p.source { d["source"] = .string(s) }
                 if !p.attributes.isEmpty { d["attributes"] = .object(p.attributes.mapValues { .string($0) }) }
                 o["dom"] = .object(d)
             }
