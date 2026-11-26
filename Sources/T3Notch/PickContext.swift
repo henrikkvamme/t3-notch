@@ -65,7 +65,8 @@ struct PickContext: Sendable {
         var parts: [String] = []
         func walk(_ n: PickElement) {
             guard parts.joined(separator: " ").count < 400 else { return }
-            for s in [n.name, n.value] { if let s, !s.isEmpty, parts.last != s { parts.append(s) } }
+            // A description is often the only label, as on System Settings' sidebar buttons.
+            for s in [n.name, n.value, n.description] { if let s, !s.isEmpty, !parts.contains(s) { parts.append(s) } }
             n.children.forEach(walk)
         }
         walk(e)
