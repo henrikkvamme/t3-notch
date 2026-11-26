@@ -520,14 +520,32 @@ final class Store {
     @ObservationIgnored private var stale: [String: Set<String>] = [:]
 
     private func markStale(_ environmentId: String) {
+        snapshotEndTasks.removeValue(forKey: environmentId)?.cancel()
         let prefix = environmentId + "/"
         stale[environmentId] = Set(threads.keys.filter { $0.hasPrefix(prefix) })
             .union(projects.keys.filter { $0.hasPrefix(prefix) })
     }
 
     private func removeStale(_ environmentId: String) {
+        snapshotEndTasks.removeValue(forKey: environmentId)?.cancel()
         guard let keys = stale.removeValue(forKey: environmentId), !keys.isEmpty else { return }
         for key in keys { threads[key] = nil; projects[key] = nil }
+    }
+
+    @ObservationIgnored private var snapshotEndTasks: [String: Task<Void, Never>] = [:]
+
+    /// A server from before the completion marker sends no `synchronized`: five seconds
+    /// without a snapshot part end the snapshot too.
+    private func endSnapshotSoon(_ environmentId: String, linked: Bool) {
+        guard stale[environmentId] != nil else { return }
+        snapshotEndTasks[environmentId]?.cancel()
+        snapshotEndTasks[environmentId] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, let self else { return }
+            self.removeStale(environmentId)
+            if linked { self.saveShellSoon(environmentId) }
+            self.shellVersion &+= 1
+        }
     }
 
     /// Shows a linked environment's chats from the last run until its socket opens. A linked
@@ -586,7 +604,7 @@ final class Store {
     private func subscribeShell() {
         guard let env = environmentId else { return }
         markStale(env)
-        shellStreamId = rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self] item in
+        shellStreamId = rpc.subscribe("orchestration.subscribeShell", ["requestCompletionMarker": .bool(true)], onValue: { [weak self] item in
             self?.applyShell(item, environmentId: env)
         }, onEnd: { [weak self] result in
             if case .failure(let e) = result, self?.rpc.isOpen == true { self?.fail("shell stream ended: \(e)") }
@@ -595,7 +613,7 @@ final class Store {
 
     private func subscribeShell(of env: LinkedEnvironment) {
         markStale(env.id)
-        env.shellStreamId = env.rpc.subscribe("orchestration.subscribeShell", [:], onValue: { [weak self, weak env] item in
+        env.shellStreamId = env.rpc.subscribe("orchestration.subscribeShell", ["requestCompletionMarker": .bool(true)], onValue: { [weak self, weak env] item in
             guard let self, let env else { return }
             self.applyShell(item, environmentId: env.id, label: env.label)
         }, onEnd: { [weak env] result in
@@ -627,6 +645,7 @@ final class Store {
             // part names are removed at `synchronized`; later removals arrive as events.
             for t in ts { if let o = t.object, let id = o["id"]?.string { let key = Self.key(env, id); threads[key] = Self.scoped(o, environmentId: env, label: label); stale[env]?.remove(key) } }
             for p in ps { if let o = p.object, let id = o["id"]?.string { let key = Self.key(env, id); projects[key] = Self.scoped(o, environmentId: env, label: label); stale[env]?.remove(key) } }
+            endSnapshotSoon(env, linked: label != nil)
             // Select mode can start before the chats load (just after launch).
             focusLastOpened()
         case "thread.updated":
