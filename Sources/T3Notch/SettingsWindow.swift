@@ -144,6 +144,12 @@ final class SettingsModel {
     var expandOnHover = Settings.expandOnHover {
         didSet { Settings.expandOnHover = expandOnHover }
     }
+    var controlOptionSelect = Settings.controlOptionSelect {
+        didSet { Settings.controlOptionSelect = controlOptionSelect }
+    }
+    var enterSteers = Settings.enterSteers {
+        didSet { Settings.enterSteers = enterSteers }
+    }
     var launchAtLogin = SMAppService.mainApp.status == .enabled
     var checking = false
     var upToDate = false
@@ -159,6 +165,8 @@ final class SettingsModel {
         showWhenChatFinishes = Settings.showWhenChatFinishes
         showToolSteps = Settings.showToolSteps
         expandOnHover = Settings.expandOnHover
+        controlOptionSelect = Settings.controlOptionSelect
+        enterSteers = Settings.enterSteers
         launchAtLogin = SMAppService.mainApp.status == .enabled
         upToDate = false
     }
@@ -269,10 +277,16 @@ private struct SettingsView: View {
         VStack(spacing: 0) {
             row("Expand on notch hover", isOn: $model.expandOnHover)
             divider
+            row("⏎ steers the running turn", caption: model.enterSteers ? "⌘⏎ queues after it" : "⏎ queues after it; ⌘⏎ steers",
+                isOn: $model.enterSteers)
+            divider
             row("Show when chat finishes", caption: "Only applies when T3 is not in view",
                 isOn: $model.showWhenChatFinishes)
             divider
             row("Show commands while working", isOn: $model.showToolSteps)
+            divider
+            row("Select with ⌃⌥", caption: "Tap Control and Option in any app to select what is under the pointer",
+                isOn: $model.controlOptionSelect)
             divider
             row("Hide status dot", isOn: Binding(get: { model.ui.dotHiddenByUser }, set: { model.ui.dotHiddenByUser = $0 }))
             divider
