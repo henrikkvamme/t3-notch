@@ -99,6 +99,7 @@ extension PanelController {
     /// Opens the island on the tour, at `step`.
     func startOnboarding(at step: OnboardingStep = .welcome) {
         Onboarding.begin()
+        Chime.prepare()
         onboardingHidOnce = false
         onboardingNote = 0
         ui.onboardingKeysLit = false
@@ -822,26 +823,41 @@ extension View {
 enum Chime {
     private static var sounds: [String: NSSound] = [:]
     /// D5, then up a major pentatonic scale.
-    private static let base = 587.33
-    private static let scale = [0, 2, 4, 7, 9]
+    nonisolated private static let base = 587.33
+    nonisolated private static let scale = [0, 2, 4, 7, 9]
 
-    private static func frequency(_ step: Int) -> Double {
+    nonisolated private static func frequency(_ step: Int) -> Double {
         let semitones = scale[step % scale.count] + 12 * (step / scale.count)
         return base * pow(2, Double(min(semitones, 24)) / 12)
     }
 
+    nonisolated private static func noteData(_ index: Int) -> Data {
+        wave([(frequency(index), 0)], decay: 0.11, length: 0.55)
+    }
+
+    nonisolated private static func resolveData() -> Data {
+        wave([(base, 0), (base * 1.5, 0.055), (base * 2, 0.11), (base * 2.52, 0.165)], decay: 0.42, length: 1.9)
+    }
+
+    /// Makes the tour's sounds off the main thread, so the first success does not wait on them.
+    static func prepare() {
+        guard sounds.isEmpty else { return }
+        Task {
+            let made = await Task.detached(priority: .utility) {
+                (0..<8).map { ("note \($0)", noteData($0)) } + [("resolve", resolveData())]
+            }.value
+            for (key, data) in made where sounds[key] == nil { sounds[key] = NSSound(data: data) }
+        }
+    }
+
     /// The `index`th note of the tour.
     static func note(_ index: Int) {
-        play("note \(index)", volume: 0.34) {
-            wave([(frequency(index), 0)], decay: 0.11, length: 0.55)
-        }
+        play("note \(index)", volume: 0.34) { noteData(index) }
     }
 
     /// The end of the tour: a rising D major chord.
     static func resolve() {
-        play("resolve", volume: 0.3) {
-            wave([(base, 0), (base * 1.5, 0.055), (base * 2, 0.11), (base * 2.52, 0.165)], decay: 0.42, length: 1.9)
-        }
+        play("resolve", volume: 0.3) { resolveData() }
     }
 
     private static func play(_ key: String, volume: Float, make: () -> Data) {
@@ -854,7 +870,7 @@ enum Chime {
 
     /// A WAV file of mallet tones: each a sine with a short-lived octave above it, a 4 ms
     /// attack and an exponential decay.
-    static func wave(_ tones: [(frequency: Double, start: Double)], decay: Double, length: Double) -> Data {
+    nonisolated static func wave(_ tones: [(frequency: Double, start: Double)], decay: Double, length: Double) -> Data {
         let rate = 44_100.0
         let count = Int(length * rate)
         var samples = [Double](repeating: 0, count: count)
