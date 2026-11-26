@@ -116,7 +116,15 @@ final class Store {
             let visitedAt = thread["lastVisitedAt"].string ?? thread["updatedAt"].string
                 ?? Self.visitStamp.string(from: Date())
             let sent = Date()
-            self.ownOpens[id] = sent
+            // T3 records nothing for a chat that it opened less than 10 minutes before, so
+            // such a report brings no open to know as our own. The 30 seconds allow for the
+            // time the report takes.
+            if case .number(let ms) = thread["opens"]["openedAt"],
+               sent.timeIntervalSince1970 * 1000 - ms < 9.5 * 60 * 1000 {
+                self.ownOpens[id] = nil
+            } else {
+                self.ownOpens[id] = sent
+            }
             // Not part of this task: a later pick cancels the wait above, not a sent report.
             Task { [weak self] in
                 _ = try? await self?.rpc.call("orchestration.dispatchCommand", [
@@ -126,8 +134,7 @@ final class Store {
                     "visitedAt": .string(visitedAt),
                     "opened": true,
                 ])
-                // T3's record of this open comes with the answer, if it comes: T3 records
-                // nothing for a chat that it opened less than 10 minutes before.
+                // T3's record of this open comes with the answer.
                 try? await Task.sleep(for: .seconds(2))
                 if self?.ownOpens[id] == sent { self?.ownOpens[id] = nil }
             }
