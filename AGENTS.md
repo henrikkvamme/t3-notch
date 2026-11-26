@@ -60,7 +60,8 @@ The chat picked in the ⌘K list (`Store.focusedThreadId`, kept in UserDefaults)
 with none, or once it is archived or deleted, opening the island shows the list. It is also the chat
 opened last in T3: a chat opened in T3 becomes the target (`Store.focusLastOpened`, from
 `opens.openedAt`), and a chat picked in the island is reported to T3 as opened (`thread.visit`). Two
-limits: the target stays while the island holds a draft, selections or a running select mode, and T3
+limits: the target stays while the island holds a draft, selections, a running select mode or a
+message on its way, and T3
 does not record an open of a chat that it opened less than 10 minutes before, in either direction. The list follows
 T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`): pinned by `pinOrderKey`, then
 active by `activeOrderKey`, then settled or snoozed ones by latest activity. Rows mirror

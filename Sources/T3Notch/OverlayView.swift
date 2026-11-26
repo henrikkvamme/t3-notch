@@ -16,6 +16,9 @@ final class OverlayUIState {
     var pickerRowFrames: [Int: CGRect] = [:]
     var hovering = false
     var draft = ""
+    /// Messages on their way to T3. They left the draft, but the focused chat must stay until
+    /// each one has its chat (see `Store.holdsTarget`).
+    var sending = 0
     /// Screen clips waiting to go with the next message.
     var clips: [Clip] = []
     /// Removed clips, newest last, with their old position, for ⌘Z / ⌃Z.
@@ -386,7 +389,12 @@ struct OverlayView: View {
             return
         }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        Task { await store.send(text, clips: clips) }
+        ui.sending += 1
+        Task {
+            await store.send(text, clips: clips)
+            ui.sending -= 1
+            store.focusLastOpened()
+        }
         ui.onClose?() // sent: tuck the island away and hand focus back
     }
 

@@ -89,13 +89,15 @@ final class Store {
         setFocusedAt(opened.at)
     }
 
-    /// Set by the island: true while it holds a draft, selections, or a running select mode.
+    /// Set by the island: true while it holds a draft, selections, a running select mode, or
+    /// a message that is on its way to T3.
     var holdsTarget: (() -> Bool)?
 
     /// True while `focusLastOpened` sets the focused chat.
     private var followingT3 = false
     private var openReport: Task<Void, Never>?
-    /// Chats this app reported to T3 as opened, with the time it sent each report.
+    /// Chats this app reported to T3 as opened, each until shortly after T3 answered, with
+    /// the time the report left.
     private var ownOpens: [String: Date] = [:]
 
     /// The island side: tells T3 that the focused chat was opened (`thread.visit` with
@@ -113,20 +115,21 @@ final class Store {
             // or read as it was. A chat with none gets the mark T3 itself sets on an open.
             let visitedAt = thread["lastVisitedAt"].string ?? thread["updatedAt"].string
                 ?? Self.visitStamp.string(from: Date())
-            self.ownOpens[id] = Date()
+            let sent = Date()
+            self.ownOpens[id] = sent
             // Not part of this task: a later pick cancels the wait above, not a sent report.
             Task { [weak self] in
-                do {
-                    _ = try await self?.rpc.call("orchestration.dispatchCommand", [
-                        "type": "thread.visit",
-                        "commandId": .string(UUID().uuidString.lowercased()),
-                        "threadId": .string(id),
-                        "visitedAt": .string(visitedAt),
-                        "opened": true,
-                    ])
-                } catch {
-                    self?.ownOpens[id] = nil
-                }
+                _ = try? await self?.rpc.call("orchestration.dispatchCommand", [
+                    "type": "thread.visit",
+                    "commandId": .string(UUID().uuidString.lowercased()),
+                    "threadId": .string(id),
+                    "visitedAt": .string(visitedAt),
+                    "opened": true,
+                ])
+                // T3's record of this open comes with the answer, if it comes: T3 records
+                // nothing for a chat that it opened less than 10 minutes before.
+                try? await Task.sleep(for: .seconds(2))
+                if self?.ownOpens[id] == sent { self?.ownOpens[id] = nil }
             }
         }
     }
@@ -134,7 +137,7 @@ final class Store {
     /// T3 recorded an open of a chat. For an open that this app reported, a chat picked in the
     /// island since then is still the newer choice. Every other open is followed.
     private func noticeOpen(id: String, at openedAt: JSON?) {
-        if let sent = ownOpens.removeValue(forKey: id), Date().timeIntervalSince(sent) < 10 {
+        if ownOpens.removeValue(forKey: id) != nil {
             if id != focusedThreadId, case .number(let ms)? = openedAt {
                 setFocusedAt(max(focusedAt, Date(timeIntervalSince1970: ms / 1000)))
             }
