@@ -4,11 +4,13 @@ import ScreenCaptureKit
 import SwiftUI
 import os
 
-/// A screen region added as context: the cropped PNG plus a thumbnail for the island.
+/// A screen region added as context: the cropped PNG plus a thumbnail for the island, and
+/// what the agent should know about it (filled in shortly after the clip is taken).
 struct Clip: Identifiable, Equatable {
     let id = UUID()
     let png: Data
     let thumbnail: NSImage
+    var context: PickContext?
 
     static func == (a: Clip, b: Clip) -> Bool { a.id == b.id }
 }
@@ -118,8 +120,8 @@ final class ClipController {
     private func hover(_ p: CGPoint) {
         guard !Store.demo else { return } // the demo script drives the pointer
         state.pointer = p
-        probe.probe(at: p) { [weak self] chain in
-            self?.state.setChain(chain)
+        probe.probe(at: p) { [weak self] result in
+            self?.state.setProbe(result)
         }
     }
 
@@ -128,9 +130,34 @@ final class ClipController {
     private func add(_ rect: CGRect) {
         guard rect.width >= 4, rect.height >= 4, let clip = state.crop(rect) else { return }
         state.clips.append(clip)
+        readContext(of: clip.id, rect: rect)
         withAnimation(Motion.snappy) { state.added.append(rect) }
         if !NSEvent.modifierFlags.contains(.shift) { finish() }
     }
+
+    /// Reads what the agent should know about a clip (app, window, element, marked window
+    /// shot) in the background; `finish` waits for it.
+    private func readContext(of id: UUID, rect: CGRect) {
+        let p = state.probe
+        // A dragged rectangle or a stale probe: use the window under the rectangle's centre.
+        let inWindow = !p.window.isNull && p.window.contains(CGPoint(x: rect.midX, y: rect.midY))
+        guard inWindow, p.pid != 0 else { return }
+        let element = state.element(for: rect).map(AXRef.init)
+        let shot = state.frozenScreen(for: p.window)
+        pendingContexts += 1
+        probe.context({
+            PickReader.read(pid: p.pid, windowID: p.windowID, windowFrame: p.window, clipFrame: rect,
+                            element: element?.element, screenshot: shot?.image, screenshotRect: shot?.rect ?? .null)
+        }) { [weak self] ctx in
+            guard let self else { return }
+            if let i = self.state.clips.firstIndex(where: { $0.id == id }) { self.state.clips[i].context = ctx }
+            self.pendingContexts -= 1
+            if self.pendingContexts == 0, let done = self.whenContextsRead { self.whenContextsRead = nil; done() }
+        }
+    }
+
+    private var pendingContexts = 0
+    private var whenContextsRead: (() -> Void)?
 
     /// Removes a saved clip and stays in clipping mode.
     private func remove(_ index: Int) {
@@ -148,12 +175,12 @@ final class ClipController {
         NSCursor.unhide()
         monitors = []
         withAnimation(Motion.close) { state.active = false }
-        let clips = state.clips
         Task { [windows] in
             try? await Task.sleep(for: .milliseconds(220))
             for w in windows { w.orderOut(nil) }
         }
-        onFinish(clips, state.depth)
+        let deliver = { [self] in onFinish(state.clips, state.depth) }
+        if pendingContexts == 0 { deliver() } else { whenContextsRead = deliver }
     }
 
     static func globalMouse() -> CGPoint {
@@ -216,9 +243,32 @@ final class ClipState {
     /// Takes the chain under the pointer. A frame that comes again further out is dropped
     /// (the outer one stays, so the window is always last): each level then looks different.
     func setChain(_ new: [CGRect]) {
-        var unique: [CGRect] = []
-        for r in new.reversed() where !unique.contains(where: { $0.isSame(as: r) }) { unique.append(r) }
-        chain = unique.reversed()
+        setProbe(ProbeResult(frames: new, elements: new.map { _ in nil }))
+    }
+
+    /// The last probe, for the clip's context: the element behind each `chain` frame.
+    @ObservationIgnored private(set) var probe = ProbeResult()
+    @ObservationIgnored private var chainElements: [AXUIElement?] = []
+
+    func setProbe(_ result: ProbeResult) {
+        probe = result
+        var unique: [(CGRect, AXUIElement?)] = []
+        for (r, e) in zip(result.frames, result.elements).reversed() where !unique.contains(where: { $0.0.isSame(as: r) }) {
+            unique.append((r, e))
+        }
+        chain = unique.reversed().map(\.0)
+        chainElements = unique.reversed().map(\.1)
+    }
+
+    /// The element behind a highlighted frame, if it came from the accessibility tree.
+    func element(for rect: CGRect) -> AXUIElement? {
+        guard let i = chain.firstIndex(where: { $0.isSame(as: rect) }) else { return nil }
+        return chainElements[i]
+    }
+
+    /// The frozen screen a rect is mostly on.
+    func frozenScreen(for rect: CGRect) -> Frozen? {
+        frozen.max(by: { area($0.rect.intersection(rect)) < area($1.rect.intersection(rect)) })
     }
 
     /// A mouse wheel moves one level per tick. A trackpad moves one level after 16pt of
@@ -327,17 +377,28 @@ final class ClipHaptics {
 
 // MARK: - Element probe
 
+/// What is under the pointer: the window and the element chain, smallest first.
+struct ProbeResult: @unchecked Sendable {
+    var pid: pid_t = 0
+    var windowID: CGWindowID?
+    var window: CGRect = .null
+    /// Frames, smallest first; the window is last.
+    var frames: [CGRect] = []
+    /// The element behind each frame (nil for the window entry added at the end).
+    var elements: [AXUIElement?] = []
+}
+
 /// Finds the UI element under a point and its ancestors' frames, off the main thread.
 /// Calls coalesce: while one runs, only the newest point is kept.
 final class ElementProbe: @unchecked Sendable {
     private let queue = DispatchQueue(label: "t3notch.element-probe", qos: .userInteractive)
     private let lock = NSLock()
     private var running = false
-    private var next: (CGPoint, @MainActor ([CGRect]) -> Void)?
+    private var next: (CGPoint, @MainActor (ProbeResult) -> Void)?
     private var manualAccessibilityPids = Set<pid_t>() // only touched on `queue`
     private let me = ProcessInfo.processInfo.processIdentifier
 
-    func probe(at point: CGPoint, _ done: @escaping @MainActor ([CGRect]) -> Void) {
+    func probe(at point: CGPoint, _ done: @escaping @MainActor (ProbeResult) -> Void) {
         lock.lock()
         next = (point, done) // replaces any point not yet probed
         let start = !running
@@ -356,9 +417,18 @@ final class ElementProbe: @unchecked Sendable {
         }
     }
 
-    private func chainAt(_ p: CGPoint) -> [CGRect] {
-        guard let (pid, window) = windowAt(p) else { return [] }
-        guard AXIsProcessTrusted() else { return [window] }
+    /// Reads a clip's context on the probe queue, so it never races a probe of the same app.
+    func context(_ make: @escaping @Sendable () -> PickContext, _ done: @escaping @MainActor (PickContext) -> Void) {
+        queue.async {
+            let ctx = make()
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(ctx) } }
+        }
+    }
+
+    private func chainAt(_ p: CGPoint) -> ProbeResult {
+        guard let (pid, windowID, window) = windowAt(p) else { return ProbeResult() }
+        var result = ProbeResult(pid: pid, windowID: windowID, window: window, frames: [window], elements: [nil])
+        guard AXIsProcessTrusted() else { return result }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.08)
         if !manualAccessibilityPids.contains(pid) {
@@ -368,14 +438,16 @@ final class ElementProbe: @unchecked Sendable {
         }
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(app, Float(p.x), Float(p.y), &hit) == .success,
-              var element = hit else { return [window] }
+              var element = hit else { return result }
         var frames: [CGRect] = []
+        var elements: [AXUIElement?] = []
         for _ in 0..<14 {
             if let f = Self.frame(of: element) {
                 let r = f.intersection(window)
                 if !r.isNull, r.width >= 16, r.height >= 12,
                    frames.last.map({ !$0.isSame(as: r) }) ?? true {
                     frames.append(r)
+                    elements.append(element)
                 }
             }
             if Self.role(of: element) == kAXWindowRole as String { break }
@@ -384,12 +456,14 @@ final class ElementProbe: @unchecked Sendable {
                   let next = parent, CFGetTypeID(next) == AXUIElementGetTypeID() else { break }
             element = next as! AXUIElement
         }
-        if frames.last.map({ !$0.isSame(as: window) }) ?? true { frames.append(window) }
-        return frames
+        if frames.last.map({ !$0.isSame(as: window) }) ?? true { frames.append(window); elements.append(nil) }
+        result.frames = frames
+        result.elements = elements
+        return result
     }
 
     /// The front-most normal window of another app under the point.
-    private func windowAt(_ p: CGPoint) -> (pid_t, CGRect)? {
+    private func windowAt(_ p: CGPoint) -> (pid_t, CGWindowID?, CGRect)? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
         for w in list {
@@ -397,7 +471,7 @@ final class ElementProbe: @unchecked Sendable {
                   (w[kCGWindowLayer as String] as? Int) == 0,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let r = CGRect(dictionaryRepresentation: b as CFDictionary), r.contains(p) else { continue }
-            return (pid, r)
+            return (pid, (w[kCGWindowNumber as String] as? NSNumber).map { CGWindowID($0.uint32Value) }, r)
         }
         return nil
     }

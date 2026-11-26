@@ -697,9 +697,9 @@ final class Store {
     /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
     /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
     /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
-    func send(_ text: String, steer: Bool = false, images: [Data] = []) async {
+    func send(_ text: String, steer: Bool = false, clips: [Clip] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty else { return }
+        guard !trimmed.isEmpty || !clips.isEmpty else { return }
         guard let key = targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
@@ -708,7 +708,7 @@ final class Store {
             return
         }
         if Store.demo {
-            onDemoSend?(trimmed, steer, images.count)
+            onDemoSend?(trimmed, steer, clips.count)
             return
         }
         guard let target else {
@@ -735,8 +735,10 @@ final class Store {
             command["deliveryIntent"] = "steer"
         }
         do {
-            if !images.isEmpty {
-                command["attachments"] = try await uploadImages(images, threadId: threadId, messageId: id, rpc: target.rpc)
+            if !clips.isEmpty {
+                let upload = Self.clipUploads(clips)
+                command["attachments"] = try await uploadImages(upload.images, threadId: threadId, messageId: id, rpc: target.rpc)
+                if let block = upload.prompt { command["text"] = .string(trimmed.isEmpty ? block : trimmed + "\n\n" + block) }
             }
             _ = try await target.rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = key
@@ -748,16 +750,44 @@ final class Store {
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
     /// the attachment records `message.dispatch` takes.
-    private func uploadImages(_ images: [Data], threadId: String, messageId: String, rpc: RPCClient) async throws -> JSON {
-        let uploads: [JSON] = images.enumerated().map { i, png in
-            [
-                "type": "image",
-                "name": .string("clip-\(i + 1).png"),
-                "mimeType": "image/png",
-                "sizeBytes": .number(Double(png.count)),
-                "dataUrl": .string("data:image/png;base64," + png.base64EncodedString()),
-            ]
+    /// Each clip as images plus its entry in the `<selected-ui>` block: the window with the
+    /// clip outlined (carrying the app data as T3's `source`) and the close-up. A clip with no
+    /// context sends its close-up alone. Close-ups go first when T3's limits would be passed.
+    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], prompt: String?) {
+        var images: [JSON] = []
+        var entries: [JSON] = []
+        func image(_ name: String, _ png: Data, source: JSON? = nil) -> JSON {
+            var o: [String: JSON] = ["type": "image", "name": .string(name), "mimeType": "image/png",
+                                     "sizeBytes": .number(Double(png.count)),
+                                     "dataUrl": .string("data:image/png;base64," + png.base64EncodedString())]
+            if let source { o["source"] = source }
+            return .object(o)
         }
+        let maxBytes = 80 * 1024 * 1024, maxCount = 100
+        let windowBytes = clips.reduce(0) { $0 + ($1.context?.windowPNG?.count ?? $1.png.count) }
+        var budget = maxBytes - windowBytes
+        var slots = maxCount - clips.count
+        for (i, clip) in clips.enumerated() {
+            let n = i + 1
+            guard let ctx = clip.context, let window = ctx.windowPNG else {
+                images.append(image("selection-\(n).png", clip.png))
+                continue
+            }
+            let windowName = "selection-\(n)-window.png"
+            images.append(image(windowName, window, source: ctx.source()))
+            var detailName: String?
+            if !ctx.detailIsRedundant, slots > 0, clip.png.count <= budget {
+                detailName = "selection-\(n)-detail.png"
+                images.append(image(detailName!, clip.png))
+                budget -= clip.png.count
+                slots -= 1
+            }
+            entries.append(ctx.promptEntry(index: n, windowImage: windowName, detailImage: detailName))
+        }
+        return (images, PickContext.promptBlock(entries))
+    }
+
+    private func uploadImages(_ uploads: [JSON], threadId: String, messageId: String, rpc: RPCClient) async throws -> JSON {
         let result = try await rpc.call("assets.persistChatAttachments", [
             "threadId": .string(threadId), "messageId": .string(messageId), "attachments": .array(uploads),
         ])
