@@ -19,6 +19,8 @@ final class OverlayUIState {
     /// Messages on their way to T3. They left the draft, but the focused chat must stay until
     /// each one has its chat (see `Store.holdsTarget`).
     var sending = 0
+    /// The input bar shows: there is text or a selection, or the chat has nothing to show yet.
+    var inputShows = false
     /// Screen clips waiting to go with the next message.
     var clips: [Clip] = []
     /// Removed clips, newest last, with their old position, for ⌘Z / ⌃Z.
@@ -176,7 +178,7 @@ struct OverlayView: View {
                                 clipRow.padding(.top, 10).transition(.blurReplace)
                             }
                             if ui.mode == .expanded {
-                                input.padding(.top, ui.draft.isEmpty ? 0 : 10).transition(.blurReplace)
+                                input.padding(.top, ui.inputShows ? 10 : 0).transition(.blurReplace)
                             }
                         }
                     }
@@ -375,8 +377,10 @@ struct OverlayView: View {
     /// The input stays out of sight until you type: it is mounted (so it holds keyboard
     /// focus) but collapsed to nothing, then springs open with the first character.
     private var input: some View {
-        let typing = !ui.draft.isEmpty
-        return TextField("", text: $ui.draft, axis: .vertical)
+        // Open with text or a selection, and in a chat with nothing to show yet.
+        let typing = !ui.draft.isEmpty || !ui.clips.isEmpty
+            || (store.latestReply == nil && store.pendingRequest == nil && store.targetThreadId != nil)
+        return TextField("Message", text: $ui.draft, axis: .vertical)
             .textFieldStyle(.plain)
             .font(.system(size: 14))
             .lineLimit(1...6)
@@ -390,7 +394,8 @@ struct OverlayView: View {
             .scaleEffect(typing ? 1 : 0.96, anchor: .top)
             .onSubmit(sendDraft)
             // Collapsing can drop keyboard focus; take it back so the next key types.
-            .onChange(of: typing) { _, now in
+            .onChange(of: typing, initial: true) { _, now in
+                ui.inputShows = now
                 if !now { ui.onRequestFocus?() }
                 ui.onTypingChange?(now)
             }

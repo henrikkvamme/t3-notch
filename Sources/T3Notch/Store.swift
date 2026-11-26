@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 import Observation
 
@@ -97,7 +98,10 @@ final class Store {
     /// less than 10 minutes before is not seen here.
     func focusLastOpened() {
         guard holdsTarget?() != true else { return }
-        guard let opened = lastOpenedInT3, opened.at > focusedAt || targetThreadId == nil,
+        // T3's window is the nearer sign: its title changes with every chat, while an open is
+        // recorded once in 10 minutes.
+        let newest = [lastOpenedInT3, shownInT3].compactMap { $0 }.max { $0.at < $1.at }
+        guard let opened = newest, opened.at > focusedAt || targetThreadId == nil,
               opened.id != focusedThreadId else { return }
         followingT3 = true
         focusedThreadId = opened.id
@@ -105,6 +109,79 @@ final class Store {
         // Following T3 is not a choice made now: a chat opened in T3 later, or found in a
         // later part of the launch snapshot, must still win.
         setFocusedAt(opened.at)
+    }
+
+    // MARK: T3's window
+
+    /// The chat that T3's window shows, read from its title, and when it came there.
+    private var shownInT3: (id: String, at: Date)?
+    private var t3WindowTitle: String?
+    private var t3WindowTimer: Timer?
+    private var readingT3Window = false
+
+    /// Reads the title of T3's window twice a second. T3 names the open chat there
+    /// (`resolveWindowTitle` in `apps/web/src/branding.logic.ts`: "Project / Chat", or
+    /// "Chat"), so the island follows every chat you open in T3, at once. Needs Accessibility.
+    func watchT3Window() {
+        guard t3WindowTimer == nil, !Store.demo else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.readT3Window() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        t3WindowTimer = timer
+    }
+
+    private func readT3Window() {
+        guard !readingT3Window, let pid = runtime?.app?.processIdentifier, Permission.accessibility.isGranted
+        else { return }
+        readingT3Window = true
+        // Off the main thread: an app that hangs must not hold the island.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let app = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(app, 0.3)
+            var window: CFTypeRef?, value: CFTypeRef?
+            var title: String?
+            if AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &window) == .success,
+               let window, CFGetTypeID(window) == AXUIElementGetTypeID(),
+               AXUIElementCopyAttributeValue(window as! AXUIElement, kAXTitleAttribute as CFString, &value) == .success {
+                title = value as? String
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.readingT3Window = false
+                    if let title { self?.noticeT3Window(title) }
+                }
+            }
+        }
+    }
+
+    /// T3's window has a new title: follow the chat it names. A title that stays is no news,
+    /// so a chat picked in the island is not undone before T3 shows it.
+    private func noticeT3Window(_ title: String) {
+        guard title != t3WindowTitle else { return }
+        t3WindowTitle = title
+        guard let key = Self.chat(named: title, in: threads, projectTitle: { [self] in projectTitle(for: $0) })
+        else { return }
+        shownInT3 = (key, Date())
+        focusLastOpened()
+    }
+
+    /// The chat a T3 window title names: the title is the chat's own, or ends in " / " and the
+    /// chat's title after the project's. Of chats with one title, the project's and then the
+    /// one changed last wins.
+    static func chat(named title: String, in threads: [String: JSON], projectTitle: (JSON) -> String?) -> String? {
+        var best: (key: String, score: Int, updated: String)?
+        for (key, t) in threads where t["archivedAt"].isNull && t["deletedAt"].isNull {
+            guard let name = t["title"].string?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
+            let project = projectTitle(t)?.trimmingCharacters(in: .whitespaces) ?? ""
+            let score: Int
+            if !project.isEmpty, title == "\(project) / \(name)" { score = 2 }
+            else if title == name || title.hasSuffix(" / \(name)") { score = 1 }
+            else { continue }
+            let updated = t["updatedAt"].string ?? ""
+            if best.map({ (score, updated) > ($0.score, $0.updated) }) ?? true { best = (key, score, updated) }
+        }
+        return best?.key
     }
 
     /// Set by the island: true while it holds a draft, selections, a running select mode, or
@@ -153,6 +230,8 @@ final class Store {
                     "visitedAt": .string(visitedAt),
                     "opened": true,
                 ])
+                // T3's window shows the chat too, and stays where it is.
+                self?.showInT3(id)
                 // T3's record of this open comes with the answer.
                 try? await Task.sleep(for: .seconds(2))
                 if self?.ownOpens[id] == sent { self?.ownOpens[id] = nil }
@@ -251,6 +330,7 @@ final class Store {
             runtime = nil
             return
         }
+        watchT3Window()
         if now != runtime || (connection != .connected && connection != .connecting && reconnectTask == nil) {
             runtime = now
             if case .failed = connection, reconnectTask != nil { return }
@@ -881,7 +961,29 @@ final class Store {
             if !clips.isEmpty {
                 let upload = Self.clipUploads(clips)
                 command["attachments"] = try await uploadImages(upload.images, threadId: threadId, messageId: id, rpc: target.rpc)
-                if let block = upload.prompt { command["text"] = .string(trimmed.isEmpty ? block : trimmed + "\n\n" + block) }
+                // Each image is a chip in the message, as T3 writes its own: a reference in the
+                // text (`![label](t3-context://v1/image/<id>)`) and a record that binds it to
+                // the attachment (`packages/contracts/src/composerContext.ts`).
+                var chips: [String] = [], records: [JSON] = []
+                for (attachment, label) in zip(command["attachments"]?.array ?? [], upload.labels) {
+                    guard let id = attachment["id"].string, let name = attachment["name"].string else { continue }
+                    let contextId = "image_" + String(id.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? $0 : "-" }.prefix(120))
+                    let clean = label.map { "[]\\\r\n".contains($0) ? " " : $0 }
+                    let text = String(String(clean).split(separator: " ").joined(separator: " ").prefix(60))
+                    let shown = text.isEmpty ? "Selection" : text
+                    var record: [String: JSON] = [
+                        "version": .number(1), "kind": "image", "contextId": .string(contextId), "label": .string(shown),
+                        "attachmentId": .string(id), "name": .string(name),
+                        "mimeType": attachment["mimeType"], "sizeBytes": attachment["sizeBytes"],
+                    ]
+                    if !attachment["source"].isNull { record["source"] = attachment["source"] }
+                    records.append(.object(record))
+                    chips.append("![\(shown)](t3-context://v1/image/\(contextId))")
+                }
+                var text = ([trimmed] + chips).filter { !$0.isEmpty }.joined(separator: " ")
+                if let block = upload.prompt { text += "\n\n" + block }
+                command["text"] = .string(text)
+                if !records.isEmpty { command["context"] = ["version": .number(1), "records": .array(records)] }
             }
             _ = try await target.rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = key
@@ -898,8 +1000,10 @@ final class Store {
     /// Each clip as images plus its entry in the `<selected-ui>` block: the window with the
     /// clip outlined (carrying the app data as T3's `source`) and the close-up. A clip with no
     /// context sends its close-up alone. Close-ups go first when T3's limits would be passed.
-    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], prompt: String?) {
+    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], labels: [String], prompt: String?) {
         var images: [JSON] = []
+        // What T3 writes on each image's chip, in the order of `images`.
+        var labels: [String] = []
         var entries: [JSON] = []
         func image(_ name: String, _ png: Data, source: JSON? = nil) -> JSON {
             var o: [String: JSON] = ["type": "image", "name": .string(name), "mimeType": "image/png",
@@ -908,25 +1012,28 @@ final class Store {
             if let source { o["source"] = source }
             return .object(o)
         }
-        guard let plan = clipPlan(clips) else { return ([], nil) }
+        guard let plan = clipPlan(clips) else { return ([], [], nil) }
         for (i, (clip, p)) in zip(clips, plan).enumerated() {
             let n = i + 1
             guard let ctx = clip.context else {
                 images.append(image("selection-\(n).png", clip.png))
+                labels.append("Selection \(n)")
                 continue
             }
             var windowName: String?, detailName: String?
             if p.window, let window = ctx.windowPNG {
                 windowName = "selection-\(n)-window.png"
                 images.append(image(windowName!, window, source: ctx.source()))
+                labels.append(ctx.windowTitle.isEmpty ? ctx.appName : "\(ctx.appName) · \(ctx.windowTitle)")
             }
             if p.detail {
                 detailName = "selection-\(n)-detail.png"
                 images.append(image(detailName!, clip.png))
+                labels.append(ctx.element.flatMap { $0.name ?? $0.description } ?? ctx.elementText ?? "Selection \(n)")
             }
             entries.append(ctx.promptEntry(index: n, windowImage: windowName, detailImage: detailName))
         }
-        return (images, PickContext.promptBlock(entries))
+        return (images, labels, PickContext.promptBlock(entries))
     }
 
     /// T3's limits for one message: 100 images and 80 MiB.
@@ -1041,19 +1148,31 @@ final class Store {
     /// `t3code://threads/<environmentId>/<threadId>`.
     static let appScheme = "t3code"
 
-    /// Opens the target thread in T3.
+    /// T3's link to a chat, under the environment's id that T3 shows it with.
+    private func link(to thread: JSON?) -> URLComponents? {
+        guard let t = thread, let id = t["id"].string, let env = t["environmentId"].string else { return nil }
+        // Thread ids can contain ":" (e.g. "mcp:…"), so encode each path segment.
+        let segment = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/:"))) ?? s }
+        return URLComponents(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))")
+    }
+
+    /// Makes T3's window show the chat with this key, without bringing T3 to the front. A
+    /// chat picked in the island is then the chat in T3 as well.
+    private func showInT3(_ key: String) {
+        guard !Store.demo, let url = link(to: threads[key])?.url, let app = runtime?.app?.bundleURL else { return }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: configuration)
+    }
+
     /// Opens the focused chat in T3. With `prompt`, T3 fills its chat box with it (its own
     /// prompt-link format; T3 asks first if that chat already has a draft).
     func openTargetInT3(prompt: String? = nil) {
         // A linked environment's chat opens under that environment's id, as T3 shows it.
-        guard let t = targetThread, let id = t["id"].string, let env = t["environmentId"].string else {
+        guard var comps = link(to: targetThread) else {
             runtime?.app?.activate()
             return
         }
-        // Thread ids can contain ":" (e.g. "mcp:…"), so encode each path segment.
-        let segment = { (s: String) in s.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/:"))) ?? s }
-        guard var comps = URLComponents(string: "\(Self.appScheme)://threads/\(segment(env))/\(segment(id))")
-        else { return }
         if let prompt, !prompt.isEmpty {
             comps.queryItems = [URLQueryItem(name: "prompt", value: String(prompt.prefix(7900)))]
         }

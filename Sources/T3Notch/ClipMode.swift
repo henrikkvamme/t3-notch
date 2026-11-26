@@ -90,6 +90,9 @@ final class ClipController {
         let onEnd: (SelectEnd) -> Void
         /// A scroll changed the level while ⌃⌥ was held. The welcome tour follows it.
         var onScroll: () -> Void = {}
+        /// A click picked this: its picture, and where it is on the screens (top-left origin).
+        /// It comes at once; the end of select mode brings the clip a moment later.
+        var onPick: (NSImage, CGRect) -> Void = { _, _ in }
     }
 
     enum SelectEnd {
@@ -553,21 +556,18 @@ final class ClipController {
         navigation += 1 // drops a hover probe that is still on its way
         state.frozenWindows = Self.windowFrames()
         if region { selectRegion(rect) }
-        withAnimation(Motion.content) { state.phase = .annotate }
-        // Capture before the overlays take the pointer and the keyboard. Until then the app
-        // keeps what its hover and focus show (a tooltip, an open menu), so the picture has it.
+        // The selection stays put while the screens are captured. The app keeps what its hover
+        // and focus show (a tooltip, an open menu), so the picture has it. Then the selection
+        // goes to the island: its input is where you say what to do with it.
+        state.phase = .annotate
+        sendTo = select?.target()
+        sendWhenFrozen = false
         Task { [weak self, shareable] in
             let frozen = await ScreenCapture.screens(await shareable?.value)
             guard let self, !self.finished else { return }
             self.state.frozen = frozen
             self.captured = true
-            self.takeOver()
             if let steer = self.sendWhenFrozen { self.send(steer: steer) }
-        }
-        // A slow capture must not keep the comment field waiting.
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
-            self?.takeOver()
         }
     }
 
@@ -703,6 +703,7 @@ final class ClipController {
             state.clips = [clip]
             readContext(of: clip.id, rect: rect)
             sending = steer
+            select?.onPick(clip.thumbnail, rect)
         } else {
             unsent = true
         }
@@ -779,6 +780,9 @@ final class ClipState {
     var clips: [Clip] = []
     /// Select mode: the title of the chat the comment goes to ("" for none).
     var destination = ""
+    /// The comment field shows beside the selection. Off: a click sends the selection to the
+    /// island, and its input takes the comment.
+    var commenting = false
     /// Select mode: text selected in the app in front, shown as the highlight while the
     /// pointer is on it.
     var preset: ProbeResult?
@@ -846,7 +850,7 @@ final class ClipState {
         if let anchor, let i = chain.firstIndex(where: { $0.isSame(as: anchor) }) { return i }
         // Before any scroll, start at the element you most likely mean, not the smallest.
         if anchor == nil, depth == 0, let p = preferred { return p }
-        return depth < 0 ? -1 : min(depth, max(chain.count - 1, 0))
+        return min(max(depth, 0), max(chain.count - 1, 0))
     }
 
     private func rect(at level: Int) -> CGRect? {
@@ -875,6 +879,12 @@ final class ClipState {
             unique.append((r, result.elements.indices.contains(i) ? result.elements[i] : nil, labels[i], result.dom(at: i)))
         }
         unique.reverse()
+        // One level above the window: the whole screen it is on.
+        if let outer = unique.last?.0,
+           let screen = screens.max(by: { area($0.intersection(outer)) < area($1.intersection(outer)) }),
+           !unique.contains(where: { $0.0.isSame(as: screen) }) {
+            unique.append((screen, nil, "Screen", nil))
+        }
         chain = unique.map(\.0)
         chainElements = unique.map(\.1)
         chainLabels = unique.map(\.2)
@@ -933,7 +943,7 @@ final class ClipState {
     func step(_ step: Int) {
         guard step != 0, !chain.isEmpty else { return }
         let current = level
-        let target = min(max(current + step, -1), chain.count - 1)
+        let target = min(max(current + step, 0), chain.count - 1)
         guard let now = rect(at: current), let next = rect(at: target), !next.isSame(as: now) else {
             haptics.limit(step > 0 ? .top : .bottom)
             return
@@ -1435,7 +1445,7 @@ private struct ClipOverlayView: View {
                     .transition(.blurReplace.combined(with: .scale(0.6)))
             }
             // Select mode's comment field, beside the selection, on the screen it is mostly on.
-            if state.active, state.phase == .annotate, state.cardScreen == screenRect, let card = cardFrame {
+            if state.active, state.commenting, state.phase == .annotate, state.cardScreen == screenRect, let card = cardFrame {
                 CommentCard(state: state)
                     .onGeometryChange(for: CGSize.self, of: { $0.size }) { cardSize = $0 }
                     .offset(x: card.minX, y: card.minY)

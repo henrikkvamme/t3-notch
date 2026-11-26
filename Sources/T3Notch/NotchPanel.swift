@@ -359,7 +359,7 @@ final class PanelController {
     /// collapsed input has no stray cursor and the open one always has a visible one.
     private func updateCursor() {
         guard let editor = panel.firstResponder as? NSTextView else { return }
-        let showing = ui.pickerOpen || !ui.draft.isEmpty
+        let showing = ui.pickerOpen || ui.inputShows
         editor.insertionPointColor = showing ? .controlAccentColor : .clear
         editor.updateInsertionPointStateAndRestartTimer(true)
     }
@@ -541,6 +541,7 @@ final class PanelController {
             cycle: { [weak self] step in self?.store.cycleTarget(step) },
             onEnd: { [weak self] end in self?.selectEnded(end, islandHadKeys: islandHadKeys, inTour: inTour) })
         if inTour { select.onScroll = { [weak self] in self?.onboardingSelectScrolled() } }
+        select.onPick = { [weak self] image, rect in self?.land(image, from: rect) }
         clipper = ClipController.startSelecting(select)
         if inTour { onboardingSelectHeld(started: clipper != nil) }
     }
@@ -562,18 +563,14 @@ final class PanelController {
                 element=\(clip.context?.element?.role ?? "none", privacy: .public) \
                 page=\(clip.context?.page != nil, privacy: .public) comment=\(comment.count, privacy: .public)
                 """)
-            // No chat to send to: the island takes them and opens on the list of chats. The
-            // tour sends nothing either: a first try must not start an agent.
-            // That holds for the whole Select step, also with the island folded away.
-            guard !selectSendsNothing, ui.onboarding != .select, let to, Store.clipPlan([clip]) != nil else {
-                keep(clip, comment)
-                return
-            }
-            Task { [weak self] in
-                guard let self else { return }
-                // Not sent: the island shows why, with the selection and the comment back in it.
-                if await !self.store.send(comment, steer: steer, clips: [clip], to: to) { self.keep(clip, comment) }
-            }
+            // The selection is context for the chat: it sits in the island as a chip, and the
+            // island's input has the keyboard. `land` opened the island when the click came.
+            _ = (steer, to)
+            withAnimation(Motion.snappy) { ui.clips.append(clip) }
+            if !comment.isEmpty { ui.draft = ui.draft.isEmpty ? comment : ui.draft + "\n" + comment }
+            if ui.mode != .expanded { expand() } else { panel.makeKey(); focusTextField() }
+            onSelectEnded?()
+            return
         case let .unsent(comment):
             keep(nil, comment)
             showMissingPermissions()
@@ -585,6 +582,52 @@ final class PanelController {
             focusTextField()
         }
         onSelectEnded?()
+    }
+
+    /// A click in select mode picked something. Its picture flies from where it is on screen
+    /// into the notch, and the island opens on the chat it is for, so you see where it went.
+    private func land(_ image: NSImage, from rect: CGRect) {
+        if ui.mode != .expanded { expand() }
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let primary = NSScreen.screens.first?.frame.height else { return }
+        let start = NSRect(x: rect.minX, y: primary - rect.maxY, width: rect.width, height: rect.height)
+        // It ends as a chip-sized picture just under the notch, where the island opens.
+        let notch = geometry.notchRect
+        let scale = min(64 / max(rect.width, 1), 44 / max(rect.height, 1), 1)
+        let size = CGSize(width: max(rect.width * scale, 12), height: max(rect.height * scale, 12))
+        let end = NSRect(x: notch.midX - size.width / 2, y: notch.minY - 14 - size.height,
+                         width: size.width, height: size.height)
+        let window = NSPanel(contentRect: start, styleMask: [.borderless, .nonactivatingPanel],
+                             backing: .buffered, defer: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.level = .screenSaver
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.isReleasedWhenClosed = false
+        let view = NSImageView(image: image)
+        view.imageScaling = .scaleAxesIndependently
+        view.wantsLayer = true
+        view.layer?.cornerRadius = 8
+        view.layer?.cornerCurve = .continuous
+        view.layer?.masksToBounds = true
+        view.layer?.borderWidth = 1
+        view.layer?.borderColor = NSColor.white.withAlphaComponent(0.25).cgColor
+        window.contentView = view
+        window.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.44
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0, 0.12, 1)
+            window.animator().setFrame(end, display: true)
+        }
+        // It fades as it arrives, while the chip comes in under it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.34) {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.16
+                window.animator().alphaValue = 0
+            }, completionHandler: { MainActor.assumeIsolated { window.orderOut(nil) } })
+        }
     }
 
     /// Puts a selection and its comment in the island and opens it, so nothing is lost.
