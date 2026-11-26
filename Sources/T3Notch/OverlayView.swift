@@ -36,8 +36,9 @@ final class OverlayUIState {
     /// Permissions clipping still needs; each shows as a button that opens its settings.
     var missingPermissions: [Permission] = []
     var onOpenPermission: ((Permission) -> Void)?
-    /// Answers being composed for a user-input request, by question id.
-    var answers: [String: String] = [:]
+    /// Answers being composed, keyed by request and question id, so a new request or another
+    /// chat never inherits them.
+    var answerDrafts: [String: AnswerDraft] = [:]
     /// The island's frame in the hosting view (top-left origin), for click-through.
     var islandFrame: CGRect = .zero
     /// An app is fullscreen on the notch screen; the status dot hides.
@@ -264,10 +265,13 @@ struct OverlayView: View {
     @ViewBuilder private func requestCard(_ req: Store.PendingRequest) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             if req.kind == "user_input", let questions = req.item?["questions"].array {
-                ForEach(Array(questions.enumerated()), id: \.offset) { _, q in question(q) }
+                let parsed = questions.map(UserInputQuestion.init)
+                ForEach(Array(parsed.enumerated()), id: \.offset) { _, q in question(q, request: req.id) }
+                let answers = UserInputQuestion.answers(parsed) { draft(req.id, $0) }
                 HStack {
                     Spacer()
-                    Button("Send answers") { submitAnswers(questions) }
+                    Button("Send answers") { if let answers { submitAnswers(answers, request: req.id) } }
+                        .disabled(answers == nil) // as in T3: every question needs an answer
                         .buttonStyle(.glassProminent)
                         .keyboardShortcut(.return, modifiers: .command)
                 }
@@ -297,23 +301,34 @@ struct OverlayView: View {
         .glassEffectID("request", in: glass)
     }
 
-    @ViewBuilder private func question(_ q: JSON) -> some View {
-        let id = q["id"].string ?? ""
+    @ViewBuilder private func question(_ q: UserInputQuestion, request: String) -> some View {
+        let d = draft(request, q.id)
+        let key = Self.draftKey(request, q.id)
         VStack(alignment: .leading, spacing: 6) {
-            Text(q["question"].string ?? q["header"].string ?? "Question").font(.callout.weight(.semibold))
-            let options = q["options"].array ?? []
-            if !options.isEmpty {
-                OptionList(options: options.compactMap { $0["label"].string }, selected: ui.answers[id]) { label in
-                    withAnimation(Motion.snappy) { ui.answers[id] = label }
+            Text(q.title).font(.callout.weight(.semibold))
+            if !q.options.isEmpty {
+                OptionList(options: q.options.map { (q.value(of: $0), $0.label) }, multi: q.multiSelect,
+                           selected: q.options.map(q.value(of:)).filter { q.isPicked($0, in: d) }) { value in
+                    withAnimation(Motion.snappy) { ui.answerDrafts[key] = q.toggling(value, on: draft(request, q.id)) }
                 }
             }
-            if options.isEmpty || q["allowCustomAnswer"].bool == true {
-                TextField("Your answer", text: Binding(get: { ui.answers[id] ?? "" }, set: { ui.answers[id] = $0 }))
+            if q.allowCustomAnswer {
+                TextField(q.options.isEmpty ? "Your answer" : "Or type your own answer",
+                          text: Binding(get: { q.customText(draft(request, q.id)) },
+                                        set: { ui.answerDrafts[key] = q.settingCustom($0, on: draft(request, q.id)) }),
+                          axis: .vertical)
+                    .lineLimit(1...4)
                     .textFieldStyle(.plain)
                     .padding(8)
                     .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
             }
         }
+    }
+
+    private static func draftKey(_ request: String, _ question: String) -> String { request + "\u{1F}" + question }
+
+    private func draft(_ request: String, _ question: String) -> AnswerDraft {
+        ui.answerDrafts[Self.draftKey(request, question)] ?? AnswerDraft()
     }
 
     /// The input stays out of sight until you type: it is mounted (so it holds keyboard
@@ -385,14 +400,9 @@ struct OverlayView: View {
         ui.onClose?() // sent: tuck the island away and hand focus back
     }
 
-    private func submitAnswers(_ questions: [JSON]) {
-        var out: [String: JSON] = [:]
-        for q in questions {
-            guard let id = q["id"].string, let a = ui.answers[id], !a.isEmpty else { continue }
-            out[id] = q["multiSelect"].bool == true ? .array([.string(a)]) : .string(a)
-        }
-        ui.answers = [:]
-        Task { await store.answer(out) }
+    private func submitAnswers(_ answers: [String: JSON], request: String) {
+        ui.answerDrafts = ui.answerDrafts.filter { !$0.key.hasPrefix(request + "\u{1F}") }
+        Task { await store.answer(answers) }
     }
 
     private func approvalTitle(_ req: Store.PendingRequest) -> String {
@@ -540,18 +550,22 @@ struct OverlayView: View {
 
 /// Options for a question, with a radio symbol that morphs on selection.
 private struct OptionList: View {
-    let options: [String]
-    let selected: String?
+    let options: [(value: String, label: String)]
+    /// Checkboxes in place of radio buttons.
+    let multi: Bool
+    let selected: [String]
     let onPick: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ForEach(options, id: \.self) { label in
-                Button { onPick(label) } label: {
+            ForEach(options, id: \.value) { option in
+                let on = selected.contains(option.value)
+                Button { onPick(option.value) } label: {
                     HStack {
-                        Image(systemName: selected == label ? "largecircle.fill.circle" : "circle")
+                        Image(systemName: multi ? (on ? "checkmark.square.fill" : "square")
+                                                : (on ? "largecircle.fill.circle" : "circle"))
                             .contentTransition(.symbolEffect(.replace))
-                        Text(label).multilineTextAlignment(.leading)
+                        Text(option.label).multilineTextAlignment(.leading)
                         Spacer()
                     }
                 }
