@@ -248,7 +248,7 @@ final class Store {
     /// Moves the focused chat one row down (+1) or up (−1) in the sidebar order, wrapping.
     /// Select mode's ⇥ uses it to pick where the selection goes.
     func cycleTarget(_ step: Int) {
-        let ids = sidebarThreads.prefix(60).compactMap { $0["id"].string }
+        let ids = sidebarThreads.compactMap { $0["id"].string }
         guard !ids.isEmpty else { return }
         let now = targetThreadId.flatMap { ids.firstIndex(of: $0) } ?? (step > 0 ? -1 : 0)
         focusedThreadId = ids[((now + step) % ids.count + ids.count) % ids.count]

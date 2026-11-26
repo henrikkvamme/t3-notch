@@ -38,8 +38,12 @@ final class ClipController {
     private let destination: Destination?
     /// The app in front when select mode started, which gets focus back if nothing is picked.
     private var previousApp: NSRunningApplication?
-    /// After h/l the highlight is not under the pointer: keep it until the pointer moves away.
+    /// After a navigation key the highlight is not where the pointer points: keep it until the
+    /// pointer moves 8pt away.
     private var lockedAt: CGPoint?
+    /// Bumped by every navigation key and pointer move, so a late async result that an
+    /// newer action replaced is dropped.
+    private(set) var navigation = 0
 
     struct Destination {
         let title: () -> String?
@@ -74,9 +78,17 @@ final class ClipController {
         controller.state.destination = destination?.title() ?? (destination == nil ? nil : "")
         if destination != nil {
             controller.previousApp = NSWorkspace.shared.frontmostApplication
-            // Text selected in the app in front is the first highlight, until the pointer moves.
-            controller.state.preset = ElementProbe.selection()
-            controller.state.presetPointer = globalMouse()
+            // Text selected in the app in front is the first highlight, until the pointer moves
+            // or you navigate. Read off the main thread: the app may not answer.
+            let pointer = globalMouse()
+            let generation = controller.navigation
+            controller.probe.selection { [weak controller] preset in
+                guard let controller, let preset, controller.navigation == generation,
+                      let now = controller.state.pointer ?? Optional(pointer),
+                      hypot(now.x - pointer.x, now.y - pointer.y) <= 8 else { return }
+                controller.state.preset = preset
+                controller.state.presetPointer = pointer
+            }
         }
         Task { await controller.begin() }
         return controller
@@ -131,7 +143,11 @@ final class ClipController {
         } as Any)
         // Scroll to grow (up) or shrink (down) the picked element.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
-            MainActor.assumeIsolated { self?.state.scroll(e) }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.state.preset != nil { _ = self.leavePreset(); return }
+                self.state.scroll(e)
+            }
             return nil
         } as Any)
     }
@@ -161,20 +177,48 @@ final class ClipController {
         return true
     }
 
-    private func keyboardStep(_ step: Int) {
+    /// Keyboard navigation takes over from the pointer: it overrides a saved clip under the
+    /// pointer and holds the highlight until the pointer moves.
+    private func beginNavigation() -> Int {
+        navigation += 1
+        lockedAt = state.pointer
+        state.navigating = true
+        return navigation
+    }
+
+    /// From the text selection preset, any navigation first goes to the element that holds
+    /// the selection, with its chain. Returns true when it did that.
+    private func leavePreset() -> Bool {
+        guard let preset = state.preset, let element = preset.elements.first ?? nil else {
+            state.preset = nil
+            return false
+        }
+        let generation = beginNavigation()
         state.preset = nil
+        state.presetPointer = nil
+        probe.chain(for: element, pid: preset.pid, windowID: preset.windowID, window: preset.window) { [weak self] result in
+            guard let self, self.navigation == generation, let first = result.frames.first else { return }
+            self.state.setProbe(result)
+            self.state.anchor(first)
+        }
+        return true
+    }
+
+    private func keyboardStep(_ step: Int) {
+        if leavePreset() { return }
+        _ = beginNavigation()
         state.step(step)
     }
 
     /// Moves the highlight to the previous (−1) or next (+1) sibling of the highlighted
     /// element, and keeps it there until the pointer moves 8pt.
     private func sibling(_ direction: Int) {
+        if leavePreset() { return }
         guard let h = state.highlight, let element = state.element(for: h) else { return }
         let p = state.probe
+        let generation = beginNavigation()
         probe.sibling(of: element, direction: direction, pid: p.pid, windowID: p.windowID, window: p.window) { [weak self] result in
-            guard let self, let result, let first = result.frames.first else { return }
-            self.state.preset = nil
-            self.lockedAt = self.state.pointer
+            guard let self, self.navigation == generation, let result, let first = result.frames.first else { return }
             self.state.setProbe(result)
             self.state.anchor(first)
         }
@@ -190,6 +234,8 @@ final class ClipController {
         if let locked = lockedAt {
             guard hypot(p.x - locked.x, p.y - locked.y) > 8 else { return }
             lockedAt = nil
+            state.navigating = false
+            navigation += 1 // the pointer leads again: drop pending navigation results
         }
         probe.probe(at: p) { [weak self] result in
             guard let self, self.lockedAt == nil else { return }
@@ -326,6 +372,8 @@ final class ClipState {
     var destination: String?
     /// Text selected when select mode started: shown as the highlight until the pointer moves.
     var preset: ProbeResult?
+    /// A navigation key moved the highlight: it wins over a saved clip under the pointer.
+    var navigating = false
     @ObservationIgnored var presetPointer: CGPoint?
     private var scrollAccumulator: CGFloat = 0
     private var scrollThreshold: CGFloat = 40
@@ -333,7 +381,7 @@ final class ClipState {
 
     /// The saved clip under the pointer (newest wins), which a click removes.
     var hoveredSaved: Int? {
-        guard drag == nil, let p = pointer else { return nil }
+        guard drag == nil, !navigating, let p = pointer else { return nil }
         return added.lastIndex { $0.contains(p) }
     }
 
@@ -570,6 +618,25 @@ final class ElementProbe: @unchecked Sendable {
         }
     }
 
+    /// The chain from `element` up to the window, on the probe queue.
+    func chain(for element: AXUIElement, pid: pid_t, windowID: CGWindowID?, window: CGRect,
+               _ done: @escaping @MainActor (ProbeResult) -> Void) {
+        let ref = AXRef(element: element)
+        queue.async { [self] in
+            AXUIElementSetMessagingTimeout(ref.element, 0.08)
+            let result = chain(from: ref.element, pid: pid, windowID: windowID, window: window)
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
+        }
+    }
+
+    /// The front app's text selection (see `selectionNow`), read on the probe queue.
+    func selection(_ done: @escaping @MainActor (ProbeResult?) -> Void) {
+        queue.async {
+            let result = Self.selectionNow()
+            DispatchQueue.main.async { MainActor.assumeIsolated { done(result) } }
+        }
+    }
+
     /// Finds the previous or next sibling of `element` with a usable frame, and its chain.
     func sibling(of element: AXUIElement, direction: Int, pid: pid_t, windowID: CGWindowID?, window: CGRect,
                  _ done: @escaping @MainActor (ProbeResult?) -> Void) {
@@ -585,11 +652,13 @@ final class ElementProbe: @unchecked Sendable {
         var parent: CFTypeRef?, children: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success,
               let par = parent, CFGetTypeID(par) == AXUIElementGetTypeID(),
+              { AXUIElementSetMessagingTimeout(par as! AXUIElement, 0.08); return true }(),
               AXUIElementCopyAttributeValue(par as! AXUIElement, kAXChildrenAttribute as CFString, &children) == .success,
               let list = children as? [AXUIElement],
               let start = list.firstIndex(where: { CFEqual($0, element) }) else { return nil }
         var i = start + direction
         while list.indices.contains(i) {
+            AXUIElementSetMessagingTimeout(list[i], 0.08)
             if let f = Self.frame(of: list[i])?.intersection(window), !f.isNull, f.width >= 16, f.height >= 12 {
                 return chain(from: list[i], pid: pid, windowID: windowID, window: window)
             }
@@ -690,7 +759,7 @@ final class ElementProbe: @unchecked Sendable {
 
     /// Text selected in the app in front, as a probe whose first frame is the selection's
     /// bounds. Nil when nothing is selected, the bounds are unknown, or it is a password.
-    static func selection() -> ProbeResult? {
+    private static func selectionNow() -> ProbeResult? {
         guard AXIsProcessTrusted(), let front = NSWorkspace.shared.frontmostApplication else { return nil }
         let app = AXUIElementCreateApplication(front.processIdentifier)
         AXUIElementSetMessagingTimeout(app, 0.1)
@@ -698,6 +767,7 @@ final class ElementProbe: @unchecked Sendable {
         guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
               let f = focused, CFGetTypeID(f) == AXUIElementGetTypeID() else { return nil }
         let e = f as! AXUIElement
+        AXUIElementSetMessagingTimeout(e, 0.1) // a timeout does not carry over from `app`
         guard string(e, kAXRoleAttribute) != "AXSecureTextField", string(e, kAXSubroleAttribute) != "AXSecureTextField",
               let text = string(e, kAXSelectedTextAttribute), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               AXUIElementCopyAttributeValue(e, kAXSelectedTextRangeAttribute as CFString, &range) == .success, let range,
