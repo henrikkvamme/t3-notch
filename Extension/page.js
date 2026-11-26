@@ -153,6 +153,7 @@
   // The element's HTML without scripts, styles, inline handlers, typed values or data URLs.
   const cleanHTML = (el, max) => {
     const copy = el.cloneNode(true);
+    copy.removeAttribute("data-t3n-pick");
     const all = [copy, ...copy.querySelectorAll("*")];
     for (const e of all) {
       if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(e.tagName) && e !== copy) { e.remove(); continue; }
@@ -171,11 +172,15 @@
     return html.length > max ? html.slice(0, max - 1) + "…" : html;
   };
 
-  const describe = (h) => {
+  // `mark` puts a one-time attribute on the element, so the worker's script in the page's
+  // own world (which sees the framework's data, and not this script's handles) finds it.
+  const describe = (h, mark) => {
     const el = get(h);
     if (!el) return null;
+    if (mark) el.setAttribute("data-t3n-pick", mark);
     const attributes = {};
     for (const a of el.attributes) {
+      if (a.name === "data-t3n-pick") continue;
       if (DROP_ATTRS.has(a.name.toLowerCase()) || a.name.startsWith("on") || /^\s*(data|blob|javascript):/i.test(a.value)) continue;
       attributes[a.name] = clip(cleanAttr(a.name, a.value), 200);
     }

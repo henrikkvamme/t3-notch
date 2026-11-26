@@ -69,6 +69,10 @@ struct PickContext: Sendable {
         var value: String?
         var html: String?
         var attributes: [String: String]
+        /// The components around the element, nearest first, and the file and line that made
+        /// it. Only a page in development says this (React, Vue, Svelte).
+        var components: [String] = []
+        var source: String?
     }
 
     /// Takes the extension's description of the picked page element: the element, the page
@@ -80,7 +84,9 @@ struct PickContext: Sendable {
             .reduce(into: [String: String]()) { $0[Self.clip($1.key, 60)] = Self.clip($1.value, 200) }
         page = PageElement(selector: Self.clip(selector, 1000), tag: Self.clip(tag, 40), role: str("role", 60),
                            name: str("name", 300), text: str("text", 4000), value: str("value", 2000),
-                           html: str("html", 6000), attributes: attributes)
+                           html: str("html", 6000), attributes: attributes,
+                           components: (d["components"] as? [String] ?? []).prefix(8).map { Self.clip($0, 80) },
+                           source: str("source", 500))
         if let u = d["url"] as? String { url = PickReader.sanitize(u) }
         let pick = PickElement(role: page!.role.map { "\(tag)[\($0)]" } ?? tag, name: page!.name, value: page!.value,
                                description: nil, identifier: attributes["id"], frame: clipFrame)
@@ -490,6 +496,8 @@ extension PickContext {
                 if let s = p.text { d["text"] = .string(s) }
                 if let s = p.value { d["value"] = .string(s) }
                 if let s = p.html { d["html"] = .string(s) }
+                if !p.components.isEmpty { d["components"] = .array(p.components.map { .string($0) }) }
+                if let s = p.source { d["source"] = .string(s) }
                 if !p.attributes.isEmpty { d["attributes"] = .object(p.attributes.mapValues { .string($0) }) }
                 o["dom"] = .object(d)
             }

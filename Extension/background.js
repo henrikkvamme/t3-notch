@@ -70,7 +70,7 @@ async function handle(ws, data) {
   try {
     if (msg.type === "hit") result = await hit(msg);
     else if (msg.type === "sibling") result = await run(msg.tab, (h, d) => globalThis.__t3n?.sibling(h, d), [msg.handle, msg.dir]);
-    else if (msg.type === "describe") result = await run(msg.tab, (h) => globalThis.__t3n?.describe(h), [msg.handle]);
+    else if (msg.type === "describe") result = await describe(msg);
   } catch (e) {
     result = null;
   }
@@ -114,6 +114,63 @@ async function hit(msg) {
     const s = innerWidth / areaWidth;
     return globalThis.__t3n?.hit(px * s, py * s);
   }, [msg.x - msg.area.x, msg.y - msg.area.y, msg.area.w]).then((r) => (r ? { ...r, tab: tab.id, score } : null));
+}
+
+// The element as page.js describes it, plus where it comes from in the code: the components
+// around it and the source file, when the page's framework says (a development build).
+async function describe(msg) {
+  const mark = "t" + Math.random().toString(36).slice(2);
+  const result = await run(msg.tab, (h, m) => globalThis.__t3n?.describe(h, m), [msg.handle, mark]);
+  if (!result) return null;
+  try {
+    const [{ result: code }] = await chrome.scripting.executeScript({
+      target: { tabId: msg.tab }, world: "MAIN", func: sourceOf, args: [mark],
+    });
+    if (code) Object.assign(result, code);
+  } catch {}
+  return result;
+}
+
+// Runs in the page's own world. Finds the marked element, takes the mark away, and reads
+// what React, Vue or Svelte keep on it in development: component names (nearest first) and
+// the file and line that made it.
+function sourceOf(mark) {
+  const el = document.querySelector(`[data-t3n-pick="${mark}"]`);
+  if (!el) return null;
+  el.removeAttribute("data-t3n-pick");
+  const components = [];
+  let source = null;
+  const add = (name) => {
+    if (typeof name === "string" && name && name.length < 80 && components.length < 8 && components.at(-1) !== name) components.push(name);
+  };
+  // A dev server's URL or a bundler's path, as a path in the project.
+  const tidy = (file) => String(file)
+    .replace(/^webpack-internal:\/\/\/(\([^)]*\)\/)?/, "").replace(/^webpack:\/\/[^/]*\//, "")
+    .replace(/^https?:\/\/[^/]+/, "").replace(/^\/@fs/, "").replace(/\?[^:]*/, "").replace(/^\.\//, "");
+  const library = /node_modules|react-dom|react\.development|jsx-dev-runtime|jsx-runtime|chunk-[A-Z0-9]+\.js/;
+  try {
+    const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$") || k.startsWith("__reactInternalInstance$"));
+    for (let f = key ? el[key] : null, n = 0; f && n < 300; f = f.return, n++) {
+      const s = f._debugSource; // React 18 and older
+      if (!source && s?.fileName) source = `${tidy(s.fileName)}:${s.lineNumber}${s.columnNumber ? ":" + s.columnNumber : ""}`;
+      if (!source && typeof f._debugStack?.stack === "string") { // React 19
+        for (const line of f._debugStack.stack.split("\n").slice(1)) {
+          const m = line.match(/((?:https?|webpack-internal|file):\/\/[^\s)]+?):(\d+):(\d+)\)?\s*$/);
+          if (m && !library.test(m[1])) { source = `${tidy(m[1])}:${m[2]}:${m[3]}`; break; }
+        }
+      }
+      const t = f.type;
+      if (typeof t === "function") add(t.displayName || t.name);
+      else if (t && typeof t === "object") add(t.displayName || t.render?.displayName || t.render?.name || t.type?.displayName || t.type?.name);
+    }
+    for (let v = el.__vueParentComponent, n = 0; v && n < 50; v = v.parent, n++) {
+      add(v.type?.__name || v.type?.name);
+      if (!source && v.type?.__file) source = tidy(v.type.__file);
+    }
+    const loc = el.__svelte_meta?.loc;
+    if (!source && loc?.file) source = `${tidy(loc.file)}:${loc.line}:${loc.column}`;
+  } catch {}
+  return components.length || source ? { components, source } : null;
 }
 
 // Runs `func` in the tab's top frame, injecting page.js first if it is not there yet.
