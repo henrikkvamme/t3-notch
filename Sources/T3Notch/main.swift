@@ -45,10 +45,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--open-settings") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.settings.open() }
         }
-        // `--permission-guide` starts the permission guide at launch, for checking it.
-        if CommandLine.arguments.contains("--permission-guide") {
+        // `--permission-guide [screenRecording|accessibility]` starts the permission guide at
+        // launch, for checking it.
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--permission-guide") {
+            let named = args.indices.contains(i + 1) ? Permission(rawValue: args[i + 1]) : nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.panel.grantPermissions(startingWith: Permission.missing.first ?? .accessibility)
+                self?.panel.grantPermissions(startingWith: named ?? Permission.missing.first ?? .accessibility)
             }
         }
         if Store.demo {
