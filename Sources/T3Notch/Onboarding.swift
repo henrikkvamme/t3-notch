@@ -27,6 +27,11 @@ enum Onboarding {
         if step == .done { finish() } else { UserDefaults.standard.set(step.rawValue, forKey: stepKey) }
     }
 
+    /// A new tour, also a replay: a quit midway resumes it at the next launch.
+    static func begin() {
+        UserDefaults.standard.set(false, forKey: doneKey)
+    }
+
     static func finish() {
         UserDefaults.standard.set(true, forKey: doneKey)
         UserDefaults.standard.removeObject(forKey: stepKey)
@@ -36,7 +41,9 @@ enum Onboarding {
     /// already has a token, so they skip it.
     static var startsAtLaunch: Bool {
         guard !Store.demo else { return false }
-        if UserDefaults.standard.object(forKey: doneKey) == nil, Auth.storedToken() != nil {
+        // A saved step means a tour is under way: resume it even though a token exists.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: doneKey) == nil, defaults.object(forKey: stepKey) == nil, Auth.storedToken() != nil {
             finish()
             return false
         }
@@ -82,6 +89,7 @@ enum OnboardingTip: CaseIterable {
 extension PanelController {
     /// Opens the island on the tour, at `step`.
     func startOnboarding(at step: OnboardingStep = .welcome) {
+        Onboarding.begin()
         onboardingHidOnce = false
         ui.onboardingKeysLit = false
         ui.onboarding = step
@@ -220,6 +228,12 @@ extension PanelController {
         if let name = KeyBinding(event: event)?.key ?? event.charactersIgnoringModifiers?.uppercased() {
             withAnimation(Motion.select) { _ = ui.onboardingHeld.insert(name) }
         }
+        // Shortcuts first: a rebound one may use Return or another key the tour handles.
+        if step == .chats && Settings.showChatsKey.matches(event) { onboardingShowChats(); return true }
+        if step == .tips, let tip = OnboardingTip.allCases.first(where: { $0.binding.matches(event) }) {
+            triedTip(tip)
+            return true
+        }
         switch Int(event.keyCode) {
         case kVK_Escape:
             if step.skippable { go(to: .done) } else { hide() }
@@ -229,11 +243,6 @@ extension PanelController {
             if step == .tips { go(to: .done) }
             return true
         default:
-            if step == .chats && Settings.showChatsKey.matches(event) { onboardingShowChats(); return true }
-            if step == .tips, let tip = OnboardingTip.allCases.first(where: { $0.binding.matches(event) }) {
-                triedTip(tip)
-                return true
-            }
             if event.modifierFlags.contains(.command) && event.keyCode == UInt16(kVK_ANSI_Comma) { return false }
             return true // nothing else to type into during the tour
         }
