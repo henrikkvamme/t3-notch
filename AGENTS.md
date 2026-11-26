@@ -117,8 +117,11 @@ active by `activeOrderKey`, then settled or snoozed ones by latest activity. Row
 
 Select mode has two phases. In `hover` the screen is live, the overlays let clicks through, and an event tap
 takes the scroll and the left button. The tap also ends the hold when a key goes up, because it sees the keys
-in order with the clicks. In `annotate` (after the click) the screens are frozen, and the overlay takes the
-pointer and the keyboard without making T3 Notch the active app.
+in order with the clicks. In `annotate` (after the click) the screens are captured for the picture but stay
+live under a dim, so an open island stays in view. The overlay takes the pointer and the keyboard without
+making T3 Notch the active app. ⏎ sends nothing: the picture flies to its slot in the island's clip row
+(`PanelController.land`), and the `Clip` carries its comment. `Store.send` turns each clip into one image
+and one T3 composer `element` record (`PickContext.elementRecord`).
 
 To test it, run `T3Notch --select --select-dry`. `--select` shows select mode 1.5 s after launch, as if the keys
 were held. `--select-dry` makes ⏎ put the selection and the comment in the island and send nothing. A test copy

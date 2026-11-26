@@ -27,7 +27,8 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 - **Clip the screen.** ⌘P freezes the screen. Hover to pick a UI element (scroll to grow or shrink it), or drag
   a rectangle, and the clip is attached to your next message as an image.
 - **Comment on anything.** Hold ⌃⌥ in any app and the element under the pointer lights up. Click it, type a
-  comment, and ⏎ sends the picture of it with your comment to the chat. The island does not have to be open.
+  comment, and ⏎ puts the picture of it with your comment in the island, ready to send to the chat. The island
+  does not have to be open.
 - **Answer approvals.** When the agent asks for permission or has a question, the island opens with the
   request. ⏎ accepts, ⌘⏎ accepts for the session, ⎋ declines.
 - **Hand off to T3.** ⌘O opens the chat in T3 and carries your draft text and clips into T3's chat box.
@@ -170,21 +171,27 @@ the keyboard and nothing is sent. Let go, and the outline goes away.
 | Click | Keep the selection and open a comment field beside it |
 | Drag | Select a rectangle, then comment on it |
 
-After the click you can let go of the keys. The screen is frozen, and the comment field has the keyboard.
+After the click you can let go of the keys. The screen dims, and the comment field has the keyboard.
 
 | In the comment field | |
 | --- | --- |
-| ⏎ | Send the selection and the comment to the chat. ⌘⏎ steers the running turn |
+| ⏎ | Put the selection and its comment in the island |
 | ⇧⏎ | New line |
 | ⎋ | Back one step: to pointing if you still hold ⌃⌥, else out |
 | ⌃K ⌃P / ⌃J ⌃N | Select the parent / the child |
 | ⌃H / ⌃L | Select the previous / the next sibling |
-| ⇥ / ⇧⇥ | Send to the next / the previous chat |
+| ⇥ / ⇧⇥ | Pick the next / the previous chat |
 | Click, drag, ⌃⌥ scroll | Select something else. The comment stays |
 
-The comment goes to the chat you last opened in T3 or picked in the island; its name is under the field. The
-agent gets the picture, the app, the element and its text, and in a browser with the extension the page
-element. Text you selected in the app is the selection while the pointer is on it.
+The selection flies into the island, which opens on the chat you last opened in T3 or picked in the island;
+its name is under the field. There it is a chip. Select more, write a message, and ⏎ sends all of it. Each
+selection keeps its own comment: click a chip to read or change it, and click its ✕ to remove the selection.
+
+The agent gets one picture per selection (the selection with what is around it), the app, the element and
+its text, and your comment. In a browser with the extension it also gets the page element: its selector,
+its HTML, the styles that decide its look and, on a development build, its components with file and line.
+T3 shows these as chips, not as text. Text you selected in the app is the selection while the pointer is
+on it.
 
 Select mode shows after both keys are down for 0.15 s with nothing else pressed, so an app's own ⌃⌥ shortcut
 still works. It is off while VoiceOver runs and while a password field has the keyboard. It needs
