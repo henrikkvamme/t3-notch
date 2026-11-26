@@ -556,18 +556,21 @@ final class ClipController {
         navigation += 1 // drops a hover probe that is still on its way
         state.frozenWindows = Self.windowFrames()
         if region { selectRegion(rect) }
-        // The selection stays put while the screens are captured. The app keeps what its hover
-        // and focus show (a tooltip, an open menu), so the picture has it. Then the selection
-        // goes to the island: its input is where you say what to do with it.
-        state.phase = .annotate
-        sendTo = select?.target()
-        sendWhenFrozen = false
+        withAnimation(Motion.content) { state.phase = .annotate }
+        // Capture before the overlays take the pointer and the keyboard. Until then the app
+        // keeps what its hover and focus show (a tooltip, an open menu), so the picture has it.
         Task { [weak self, shareable] in
             let frozen = await ScreenCapture.screens(await shareable?.value)
             guard let self, !self.finished else { return }
             self.state.frozen = frozen
             self.captured = true
+            self.takeOver()
             if let steer = self.sendWhenFrozen { self.send(steer: steer) }
+        }
+        // A slow capture must not keep the comment field waiting.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            self?.takeOver()
         }
     }
 
@@ -780,9 +783,6 @@ final class ClipState {
     var clips: [Clip] = []
     /// Select mode: the title of the chat the comment goes to ("" for none).
     var destination = ""
-    /// The comment field shows beside the selection. Off: a click sends the selection to the
-    /// island, and its input takes the comment.
-    var commenting = false
     /// Select mode: text selected in the app in front, shown as the highlight while the
     /// pointer is on it.
     var preset: ProbeResult?
@@ -1381,14 +1381,14 @@ private struct ClipOverlayView: View {
         ZStack(alignment: .topLeading) {
             // Select mode stays on the live screen: the frozen picture has no island in it, so
             // showing it made an open island vanish for a moment.
-            if !selecting || state.commenting, let image = state.image(for: screenRect) {
+            if !selecting, let image = state.image(for: screenRect) {
                 Image(decorative: image, scale: CGFloat(image.width) / screenRect.width)
                     .resizable()
                     .frame(width: screenRect.width, height: screenRect.height)
             }
             // Dim with a hole where the highlight is. Not while ⌃⌥ is only held: the screen
             // is live then, and nothing but the highlight shows.
-            Rectangle().fill(.black.opacity(state.active && (!selecting || state.commenting) && state.phase != .hover ? 0.38 : 0))
+            Rectangle().fill(.black.opacity(state.active && state.phase != .hover ? 0.38 : 0))
                 .overlay(alignment: .topLeading) {
                     if let h = highlight {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1447,7 +1447,7 @@ private struct ClipOverlayView: View {
                     .transition(.blurReplace.combined(with: .scale(0.6)))
             }
             // Select mode's comment field, beside the selection, on the screen it is mostly on.
-            if state.active, state.commenting, state.phase == .annotate, state.cardScreen == screenRect, let card = cardFrame {
+            if state.active, state.phase == .annotate, state.cardScreen == screenRect, let card = cardFrame {
                 CommentCard(state: state)
                     .onGeometryChange(for: CGSize.self, of: { $0.size }) { cardSize = $0 }
                     .offset(x: card.minX, y: card.minY)
