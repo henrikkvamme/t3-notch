@@ -91,6 +91,8 @@ final class PanelController {
     var onboardingTask: Task<Void, Never>?
     /// The Hotkey step: the shortcut has folded the island once.
     var onboardingHidOnce = false
+    /// How many successes the tour has had; each plays the next note up.
+    var onboardingNote = 0
 
     init(store: Store) {
         self.store = store
