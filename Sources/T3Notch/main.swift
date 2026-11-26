@@ -129,6 +129,11 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dots"), CommandLine.ar
 
 if CommandLine.arguments.contains("--demo") { Store.demo = true }
 
+// AppKit's password AutoFill check walks the key views when a text field takes focus. With
+// several SwiftUI text fields in the island (composer, chat search, question answers) that
+// walk never ends on macOS 27 and hangs the main thread. The island has no password fields.
+UserDefaults.standard.register(defaults: ["NSAutoFillHeuristicsEnabled": false])
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()
