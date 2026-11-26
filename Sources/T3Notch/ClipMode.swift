@@ -321,7 +321,12 @@ final class ClipController {
         }
         probe.probe(at: p) { [weak self] result in
             guard let self, self.lockedAt == nil, self.state.phase != .annotate else { return }
+            let before = self.state.highlight
             self.state.setProbe(result)
+            // Select mode: a light tap each time the pointer comes onto another element.
+            if self.state.phase == .hover, let now = self.state.highlight, before.map({ !$0.isSame(as: now) }) ?? true {
+                self.state.hoverTap()
+            }
         }
     }
 
@@ -802,6 +807,7 @@ final class ClipState {
     private var scrollAccumulator: CGFloat = 0
     private var scrollThreshold: CGFloat = 40
     @ObservationIgnored private let haptics = ClipHaptics()
+    func hoverTap() { haptics.hover() }
 
     /// The saved clip under the pointer (newest wins), which a click removes.
     var hoveredSaved: Int? {
@@ -994,7 +1000,8 @@ extension CGRect {
 
 // MARK: - Haptics
 
-/// Trackpad feedback for level changes: a light tap per level, and a stronger one when a
+/// Trackpad feedback: a light tap when select mode's pointer comes onto another element, a
+/// light tap per level, and a stronger one when a
 /// scroll reaches the top or bottom level. The stronger one comes once per reach, and again
 /// only after a step away. Each one is logged (category "haptics"), so `log stream` shows
 /// them on a Mac with no trackpad.
@@ -1017,6 +1024,16 @@ final class ClipHaptics {
         perform(.alignment)
         log.notice("haptic step depth=\(depth, privacy: .public)")
     }
+
+    /// The pointer came onto another element. A fast sweep over many gives a few taps, not a buzz.
+    func hover() {
+        let now = Date()
+        guard now.timeIntervalSince(lastHover) > 0.07 else { return }
+        lastHover = now
+        perform(.alignment)
+        log.notice("haptic hover")
+    }
+    private var lastHover = Date.distantPast
 
     func limit(_ edge: Edge) {
         guard atLimit != edge else { return }
