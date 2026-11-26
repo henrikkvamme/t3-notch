@@ -109,6 +109,7 @@ final class PanelController {
         ui.onOpenInT3 = { [weak self] in self?.openInT3() }
         ui.onOpenPermission = { [weak self] permission in self?.grantPermissions(startingWith: permission) }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
+        ui.onDraftSent = { [weak self] in self?.draftSent() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
         ui.onOnboardingStep = { [weak self] step in self?.go(to: step) }
@@ -303,6 +304,14 @@ final class PanelController {
             self.ui.draft = ""
             self.store.focusLastOpened()
         }
+    }
+
+    /// The message leaves from the island, so T3's field must not keep a copy of it.
+    private func draftSent() {
+        if syncedDraft != nil, let target = composerTarget {
+            composer.write("", pid: target.pid, chatTitle: target.title)
+        }
+        syncedDraft = nil
     }
 
     private func syncDraft() {
@@ -583,11 +592,7 @@ final class PanelController {
             store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
             return
         }
-        // The message leaves from the island, so T3's field must not keep a copy of it.
-        if syncedDraft != nil, let target = composerTarget {
-            composer.write("", pid: target.pid, chatTitle: target.title)
-        }
-        syncedDraft = nil
+        draftSent()
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         ui.sending += 1
         let to = store.targetThreadId

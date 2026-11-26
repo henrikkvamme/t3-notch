@@ -70,6 +70,8 @@ final class OverlayUIState {
     var updater: Updater?
     var onOpenInT3: (() -> Void)?
     var onRequestFocus: (() -> Void)?
+    /// The draft is about to leave for the chat.
+    var onDraftSent: (() -> Void)?
     /// Typing started or stopped; the controller shows or hides the text cursor.
     var onTypingChange: ((Bool) -> Void)?
     var onIslandFrameChange: (() -> Void)?
@@ -452,6 +454,7 @@ struct OverlayView: View {
             store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
             return
         }
+        ui.onDraftSent?()
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
         ui.sending += 1
         let to = store.targetThreadId
@@ -510,69 +513,71 @@ struct OverlayView: View {
         .animation(Motion.content, value: ui.missingPermissions)
     }
 
-    /// Clips waiting to be sent. A click on one opens its comment; its ✕ removes it.
+    /// Selections waiting to be sent, as chips: a small picture and the comment, or what the
+    /// selection is. A click on one opens its comment; its ✕ removes it.
     private var clipRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            ChipFlow(spacing: 6) {
                 ForEach(ui.clips) { clip in
                     let hovered = hoveredClip == clip.id
-                    Image(nsImage: clip.thumbnail)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 64, height: 44)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(.white.opacity(0.15)))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.accentColor, lineWidth: 2).opacity(ui.editingClip == clip.id ? 1 : 0))
-                        .overlay(alignment: .bottomLeading) {
-                            // This selection has a comment.
-                            if !clip.comment.isEmpty {
-                                Image(systemName: "text.bubble.fill").font(.system(size: 9))
-                                    .padding(3)
-                                    .background(.black.opacity(0.6), in: .rect(cornerRadius: 5))
-                                    .padding(3)
-                                    .transition(.opacity)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            withAnimation(Motion.content) { ui.editingClip = ui.editingClip == clip.id ? nil : clip.id }
-                            ui.onRequestFocus?()
-                        }
-                        .overlay(alignment: .topTrailing) {
-                            // The ✕ removes the clip.
-                            if hovered {
-                                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
-                                    .frame(width: 18, height: 18)
-                                    .glassEffect(.regular, in: .circle)
-                                    .contentShape(Circle())
-                                    .onTapGesture {
-                                        withAnimation(Motion.content) {
-                                            if let i = ui.clips.firstIndex(of: clip) {
-                                                ui.removedClips.append((clip, i))
-                                                ui.draftAtClipRemoval = ui.draft
-                                                ui.clips.remove(at: i)
-                                            }
-                                            if hoveredClip == clip.id { hoveredClip = nil }
-                                            if ui.editingClip == clip.id { ui.editingClip = nil }
+                    let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    HStack(spacing: 6) {
+                        Image(nsImage: clip.thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 20, height: 20)
+                            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        Text(clip.comment.isEmpty ? clip.label : clip.comment)
+                            .font(.system(size: 12))
+                            .foregroundStyle(clip.comment.isEmpty ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.leading, 4).padding(.trailing, 9).padding(.vertical, 4)
+                    .frame(maxWidth: 190, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .background(.white.opacity(hovered ? 0.14 : 0.08), in: shape)
+                    .overlay(shape.strokeBorder(ui.editingClip == clip.id ? Color.accentColor : .white.opacity(0.12),
+                                                lineWidth: ui.editingClip == clip.id ? 1.5 : 1))
+                    .contentShape(shape)
+                    .onTapGesture {
+                        withAnimation(Motion.content) { ui.editingClip = ui.editingClip == clip.id ? nil : clip.id }
+                        ui.onRequestFocus?()
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        // The ✕ removes the selection.
+                        if hovered {
+                            Image(systemName: "xmark").font(.system(size: 7, weight: .bold))
+                                .frame(width: 16, height: 16)
+                                .glassEffect(.regular, in: .circle)
+                                .contentShape(Circle())
+                                .onTapGesture {
+                                    withAnimation(Motion.content) {
+                                        if let i = ui.clips.firstIndex(of: clip) {
+                                            ui.removedClips.append((clip, i))
+                                            ui.draftAtClipRemoval = ui.draft
+                                            ui.clips.remove(at: i)
                                         }
+                                        if hoveredClip == clip.id { hoveredClip = nil }
+                                        if ui.editingClip == clip.id { ui.editingClip = nil }
                                     }
-                                    .offset(x: 6, y: -6)
-                                    .transition(.blurReplace.combined(with: .scale(0.6)))
-                            }
+                                }
+                                .offset(x: 5, y: -5)
+                                .transition(.blurReplace.combined(with: .scale(0.6)))
                         }
-                        .onHover { inside in
-                            withAnimation(Motion.snappy) {
-                                if inside { hoveredClip = clip.id } else if hoveredClip == clip.id { hoveredClip = nil }
-                            }
+                    }
+                    .onHover { inside in
+                        withAnimation(Motion.snappy) {
+                            if inside { hoveredClip = clip.id } else if hoveredClip == clip.id { hoveredClip = nil }
                         }
-                        .transition(.blurReplace.combined(with: .scale(0.8)))
+                    }
+                    .transition(.blurReplace.combined(with: .scale(0.8)))
                 }
                 // Where the selection that is flying in will sit.
                 if ui.landing {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(.white.opacity(0.06))
-                        .frame(width: 64, height: 44)
+                        .frame(width: 44, height: 28)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { ui.landingSlot = $0 }
                         .transition(.opacity)
                 }
@@ -783,5 +788,33 @@ private struct HeaderIcon: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(Motion.snappy, value: hovering)
+    }
+}
+
+/// Lays chips out in rows, left to right, and starts a new row when one is full.
+struct ChipFlow: Layout {
+    var spacing: CGFloat = 6
+
+    private func rows(_ subviews: Subviews, width: CGFloat) -> (frames: [CGRect], size: CGSize) {
+        var frames: [CGRect] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return (frames, CGSize(width: widest, height: y + rowHeight))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        rows(subviews, width: proposal.width ?? .infinity).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (sub, frame) in zip(subviews, rows(subviews, width: bounds.width).frames) {
+            sub.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: .unspecified)
+        }
     }
 }

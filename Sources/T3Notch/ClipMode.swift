@@ -15,6 +15,15 @@ struct Clip: Identifiable, Equatable {
     /// What you wrote about this selection. It goes to the agent with the selection.
     var comment = ""
 
+    /// What the selection is, in a few words, for its chip.
+    var label: String {
+        guard let c = context else { return "Selection" }
+        let name = c.page.flatMap { $0.name ?? $0.hint ?? $0.text } ?? c.element.flatMap { $0.name ?? $0.description }
+            ?? c.elementText ?? c.page?.tag ?? c.element?.role ?? "Selection"
+        let words = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.isEmpty ? "Selection" : String(words.prefix(40))
+    }
+
     static func == (a: Clip, b: Clip) -> Bool { a.id == b.id }
 }
 
