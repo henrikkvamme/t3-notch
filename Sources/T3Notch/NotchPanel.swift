@@ -461,6 +461,8 @@ final class PanelController {
             return
         }
         let wasPeeking = ui.mode != .hidden
+        // Before the clipper makes T3 Notch active: the island hands focus back to this app.
+        rememberFrontApp()
         orderOutTask?.cancel()
         ui.mode = .hidden
         ui.pickerOpen = false
