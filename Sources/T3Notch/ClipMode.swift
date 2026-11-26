@@ -59,6 +59,7 @@ final class ClipController {
     }
 
     private func begin() async {
+        state.frozenWindows = Self.windowFrames()
         let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
         var shots: [(NSScreen, CGRect, CGImage?)] = []
         for screen in NSScreen.screens {
@@ -142,8 +143,15 @@ final class ClipController {
         // A dragged rectangle or a stale probe: use the window under the rectangle's centre.
         let inWindow = !p.window.isNull && p.window.contains(CGPoint(x: rect.midX, y: rect.midY))
         guard inWindow, p.pid != 0 else { return }
+        // The window must be where it was when the screens froze, or its frame would crop
+        // other pixels out of the frozen image.
+        if let id = p.windowID {
+            guard let then = state.frozenWindows[id], then.isSame(as: p.window) else { return }
+        }
         let element = state.element(for: rect).map(AXRef.init)
-        let shot = state.frozenScreen(for: p.window)
+        // The screen with the selection, so the window image always shows it (a window that
+        // spans screens is cut to this one).
+        let shot = state.frozenScreen(for: rect)
         pendingContexts += 1
         probe.context({
             PickReader.read(pid: p.pid, windowID: p.windowID, windowFrame: p.window, clipFrame: rect,
@@ -180,7 +188,31 @@ final class ClipController {
             for w in windows { w.orderOut(nil) }
         }
         let deliver = { [self] in onFinish(state.clips, state.depth) }
-        if pendingContexts == 0 { deliver() } else { whenContextsRead = deliver }
+        if pendingContexts == 0 { deliver() } else {
+            whenContextsRead = deliver
+            // An app that stops answering must not hold the clips back: send them without
+            // the context still missing after a second.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, let done = self.whenContextsRead else { return }
+                self.whenContextsRead = nil
+                done()
+            }
+        }
+    }
+
+    /// Every normal window's frame now, by window number.
+    private static func windowFrames() -> [CGWindowID: CGRect] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return [:] }
+        var out: [CGWindowID: CGRect] = [:]
+        for w in list where (w[kCGWindowLayer as String] as? Int) == 0 {
+            guard let n = w[kCGWindowNumber as String] as? NSNumber,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let r = CGRect(dictionaryRepresentation: b as CFDictionary) else { continue }
+            out[CGWindowID(n.uint32Value)] = r
+        }
+        return out
     }
 
     static func globalMouse() -> CGPoint {
@@ -199,6 +231,8 @@ final class ClipState {
 
     var active = false
     var frozen: [Frozen] = []
+    /// Window frames when the screens froze, by window number.
+    @ObservationIgnored var frozenWindows: [CGWindowID: CGRect] = [:]
     /// Element frames under the pointer, smallest first, each one different from the others.
     private(set) var chain: [CGRect] = []
     /// The level you want: how many steps up the chain, −1 for the whole window. It is kept

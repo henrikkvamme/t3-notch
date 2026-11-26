@@ -598,28 +598,52 @@ final class Store {
             if let source { o["source"] = source }
             return .object(o)
         }
-        let maxBytes = 80 * 1024 * 1024, maxCount = 100
-        let windowBytes = clips.reduce(0) { $0 + ($1.context?.windowPNG?.count ?? $1.png.count) }
-        var budget = maxBytes - windowBytes
-        var slots = maxCount - clips.count
-        for (i, clip) in clips.enumerated() {
+        guard let plan = clipPlan(clips) else { return ([], nil) }
+        for (i, (clip, p)) in zip(clips, plan).enumerated() {
             let n = i + 1
-            guard let ctx = clip.context, let window = ctx.windowPNG else {
+            guard let ctx = clip.context else {
                 images.append(image("selection-\(n).png", clip.png))
                 continue
             }
-            let windowName = "selection-\(n)-window.png"
-            images.append(image(windowName, window, source: ctx.source()))
-            var detailName: String?
-            if !ctx.detailIsRedundant, slots > 0, clip.png.count <= budget {
+            var windowName: String?, detailName: String?
+            if p.window, let window = ctx.windowPNG {
+                windowName = "selection-\(n)-window.png"
+                images.append(image(windowName!, window, source: ctx.source()))
+            }
+            if p.detail {
                 detailName = "selection-\(n)-detail.png"
                 images.append(image(detailName!, clip.png))
-                budget -= clip.png.count
-                slots -= 1
             }
             entries.append(ctx.promptEntry(index: n, windowImage: windowName, detailImage: detailName))
         }
         return (images, PickContext.promptBlock(entries))
+    }
+
+    /// T3's limits for one message: 100 images and 80 MiB.
+    static let maxClipBytes = 80 * 1024 * 1024, maxClipImages = 100
+
+    /// Which images each clip sends within T3's limits: first one image per clip (the
+    /// window, or the close-up when that is all there is or the window does not fit), then
+    /// close-ups while they fit. Nil when even one image per clip is too much.
+    static func clipPlan(_ clips: [Clip]) -> [(window: Bool, detail: Bool)]? {
+        guard clips.count <= maxClipImages else { return nil }
+        var plan = clips.map { c in (window: c.context?.windowPNG != nil, detail: c.context?.windowPNG == nil) }
+        func size(_ i: Int) -> Int { plan[i].window ? clips[i].context!.windowPNG!.count : clips[i].png.count }
+        var bytes = clips.indices.reduce(0) { $0 + size($1) }
+        // Over budget: send the smaller image for the clips with the biggest windows.
+        for i in clips.indices.sorted(by: { size($0) > size($1) }) where bytes > maxClipBytes && plan[i].window {
+            let window = clips[i].context!.windowPNG!.count, detail = clips[i].png.count
+            if detail < window { plan[i] = (false, true); bytes -= window - detail }
+        }
+        guard bytes <= maxClipBytes else { return nil }
+        var count = clips.count
+        for i in clips.indices where plan[i].window && !plan[i].detail && !clips[i].context!.detailIsRedundant {
+            guard count < maxClipImages, bytes + clips[i].png.count <= maxClipBytes else { continue }
+            plan[i].detail = true
+            bytes += clips[i].png.count
+            count += 1
+        }
+        return plan
     }
 
     private func uploadImages(_ uploads: [JSON], threadId: String, messageId: String) async throws -> JSON {
