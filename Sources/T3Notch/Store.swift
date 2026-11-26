@@ -245,6 +245,20 @@ final class Store {
         return id
     }
 
+    /// Moves the focused chat one row down (+1) or up (−1) in the sidebar order, wrapping.
+    /// Select mode's ⇥ uses it to pick where the selection goes.
+    func cycleTarget(_ step: Int) {
+        let ids = sidebarThreads.compactMap { $0["id"].string }
+        guard !ids.isEmpty else { return }
+        let now = targetThreadId.flatMap { ids.firstIndex(of: $0) } ?? (step > 0 ? -1 : 0)
+        focusedThreadId = ids[((now + step) % ids.count + ids.count) % ids.count]
+    }
+
+    /// The focused chat's title, for select mode's destination label.
+    var targetTitle: String? {
+        targetThreadId.flatMap { threads[$0]?["title"].string }
+    }
+
     /// Mirrors T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`):
     /// pinned threads by `pinOrderKey` (unkeyed ones newest first, after keyed), then
     /// active threads by `activeOrderKey` (unkeyed ones first, newest first).
@@ -538,9 +552,9 @@ final class Store {
     /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
     /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
     /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
-    func send(_ text: String, steer: Bool = false, images: [Data] = []) async {
+    func send(_ text: String, steer: Bool = false, clips: [Clip] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty else { return }
+        guard !trimmed.isEmpty || !clips.isEmpty else { return }
         guard let threadId = targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
@@ -549,7 +563,7 @@ final class Store {
             return
         }
         if Store.demo {
-            onDemoSend?(trimmed, steer, images.count)
+            onDemoSend?(trimmed, steer, clips.count)
             return
         }
         let id = UUID().uuidString.lowercased()
@@ -570,8 +584,10 @@ final class Store {
             command["deliveryIntent"] = "steer"
         }
         do {
-            if !images.isEmpty {
-                command["attachments"] = try await uploadImages(images, threadId: threadId, messageId: id)
+            if !clips.isEmpty {
+                let upload = Self.clipUploads(clips)
+                command["attachments"] = try await uploadImages(upload.images, threadId: threadId, messageId: id)
+                if let block = upload.prompt { command["text"] = .string(trimmed.isEmpty ? block : trimmed + "\n\n" + block) }
             }
             _ = try await rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = threadId
@@ -583,16 +599,68 @@ final class Store {
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
     /// the attachment records `message.dispatch` takes.
-    private func uploadImages(_ images: [Data], threadId: String, messageId: String) async throws -> JSON {
-        let uploads: [JSON] = images.enumerated().map { i, png in
-            [
-                "type": "image",
-                "name": .string("clip-\(i + 1).png"),
-                "mimeType": "image/png",
-                "sizeBytes": .number(Double(png.count)),
-                "dataUrl": .string("data:image/png;base64," + png.base64EncodedString()),
-            ]
+    /// Each clip as images plus its entry in the `<selected-ui>` block: the window with the
+    /// clip outlined (carrying the app data as T3's `source`) and the close-up. A clip with no
+    /// context sends its close-up alone. Close-ups go first when T3's limits would be passed.
+    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], prompt: String?) {
+        var images: [JSON] = []
+        var entries: [JSON] = []
+        func image(_ name: String, _ png: Data, source: JSON? = nil) -> JSON {
+            var o: [String: JSON] = ["type": "image", "name": .string(name), "mimeType": "image/png",
+                                     "sizeBytes": .number(Double(png.count)),
+                                     "dataUrl": .string("data:image/png;base64," + png.base64EncodedString())]
+            if let source { o["source"] = source }
+            return .object(o)
         }
+        guard let plan = clipPlan(clips) else { return ([], nil) }
+        for (i, (clip, p)) in zip(clips, plan).enumerated() {
+            let n = i + 1
+            guard let ctx = clip.context else {
+                images.append(image("selection-\(n).png", clip.png))
+                continue
+            }
+            var windowName: String?, detailName: String?
+            if p.window, let window = ctx.windowPNG {
+                windowName = "selection-\(n)-window.png"
+                images.append(image(windowName!, window, source: ctx.source()))
+            }
+            if p.detail {
+                detailName = "selection-\(n)-detail.png"
+                images.append(image(detailName!, clip.png))
+            }
+            entries.append(ctx.promptEntry(index: n, windowImage: windowName, detailImage: detailName))
+        }
+        return (images, PickContext.promptBlock(entries))
+    }
+
+    /// T3's limits for one message: 100 images and 80 MiB.
+    static let maxClipBytes = 80 * 1024 * 1024, maxClipImages = 100
+
+    /// Which images each clip sends within T3's limits: first one image per clip (the
+    /// window, or the close-up when that is all there is or the window does not fit), then
+    /// close-ups while they fit. Nil when even one image per clip is too much.
+    static func clipPlan(_ clips: [Clip]) -> [(window: Bool, detail: Bool)]? {
+        guard clips.count <= maxClipImages else { return nil }
+        var plan = clips.map { c in (window: c.context?.windowPNG != nil, detail: c.context?.windowPNG == nil) }
+        func size(_ i: Int) -> Int { plan[i].window ? clips[i].context!.windowPNG!.count : clips[i].png.count }
+        var bytes = clips.indices.reduce(0) { $0 + size($1) }
+        // Over budget: send the smaller image for the clips with the biggest windows.
+        for i in clips.indices.sorted(by: { size($0) > size($1) }) where bytes > maxClipBytes && plan[i].window {
+            let window = clips[i].context!.windowPNG!.count, detail = clips[i].png.count
+            if detail < window { plan[i] = (false, true); bytes -= window - detail }
+        }
+        guard bytes <= maxClipBytes else { return nil }
+        var count = clips.count
+        for i in clips.indices where plan[i].window && !plan[i].detail && !clips[i].context!.detailIsRedundant {
+            guard count < maxClipImages, bytes + clips[i].png.count <= maxClipBytes else { continue }
+            plan[i].detail = true
+            bytes += clips[i].png.count
+            count += 1
+        }
+        return plan
+    }
+
+    private func uploadImages(_ uploads: [JSON], threadId: String, messageId: String) async throws -> JSON {
         let result = try await rpc.call("assets.persistChatAttachments", [
             "threadId": .string(threadId), "messageId": .string(messageId), "attachments": .array(uploads),
         ])
@@ -740,6 +808,12 @@ enum Settings {
     static var expandOnHover: Bool {
         get { UserDefaults.standard.object(forKey: "expandOnHover") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
+    }
+
+    /// A tap of ⌃⌥ from any app starts select mode. On by default.
+    static var controlOptionSelect: Bool {
+        get { UserDefaults.standard.object(forKey: "controlOptionSelect") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "controlOptionSelect") }
     }
 
     /// Pop the island open when the focused chat's run ends. On by default.

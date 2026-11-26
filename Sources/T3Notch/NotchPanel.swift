@@ -428,10 +428,15 @@ final class PanelController {
 
     func sendDraft(steer: Bool) {
         let text = ui.draft
-        let images = ui.clips.map(\.png)
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
+        let clips = ui.clips
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
+        // Keep the draft when the selections cannot go in one message.
+        guard Store.clipPlan(clips) != nil else {
+            store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
+            return
+        }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        Task { await store.send(text, steer: steer, images: images) }
+        Task { await store.send(text, steer: steer, clips: clips) }
         hide() // sent: tuck the island away and hand focus back
     }
 
@@ -463,6 +468,40 @@ final class PanelController {
             self.ui.clips += clips
             self.expand()
             self.showMissingPermissions()
+        }
+    }
+
+    /// A tap of ⌃⌥ from any app: select what is under the pointer without opening the island
+    /// first. Picks go to the focused chat and open the island; Esc with no picks leaves
+    /// everything as it was.
+    func startSelecting() {
+        guard clipper == nil, ui.mode != .expanded else { return }
+        guard Permission.screenRecording.isGranted, Permission.accessibility.isGranted else {
+            expand()
+            showMissingPermissions()
+            return
+        }
+        let wasPeeking = ui.mode != .hidden
+        // Before the clipper makes T3 Notch active: the island hands focus back to this app.
+        rememberFrontApp()
+        orderOutTask?.cancel()
+        ui.mode = .hidden
+        ui.pickerOpen = false
+        panel.ignoresMouseEvents = true
+        panel.orderOut(nil)
+        let destination = ClipController.Destination(
+            title: { [weak self] in self?.store.targetTitle },
+            cycle: { [weak self] step in self?.store.cycleTarget(step) })
+        clipper = ClipController.start(depth: ui.clipDepth, destination: destination) { [weak self] clips, depth in
+            guard let self else { return }
+            self.clipper = nil
+            self.ui.clipDepth = depth
+            if clips.isEmpty {
+                if wasPeeking { self.peek(autoHide: true) }
+                return
+            }
+            self.ui.clips += clips
+            self.expand()
         }
     }
 
