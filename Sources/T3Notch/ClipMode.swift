@@ -14,6 +14,9 @@ struct Clip: Identifiable, Equatable {
     var context: PickContext?
     /// What you wrote about this selection. It goes to the agent with the selection.
     var comment = ""
+    /// Where its chip sits in the message text (UTF-16 units, the text without chips). Nil
+    /// until the message field places it at the caret.
+    var offset: Int?
 
     /// What the selection is, in a few words, for its chip.
     var label: String {
@@ -279,7 +282,7 @@ final class ClipController {
         guard state.region == nil else { return } // a dragged rectangle has no levels
         if leavePreset() { return }
         _ = beginNavigation()
-        state.step(step)
+        state.step(step, key: true)
     }
 
     /// Moves the highlight to the previous (−1) or next (+1) sibling of the highlighted
@@ -292,7 +295,8 @@ final class ClipController {
         if let node = state.dom(for: h) {
             let generation = beginNavigation()
             probe.domSibling(of: node, direction: direction, base: p) { [weak self] result in
-                guard let self, self.navigation == generation, let result, let first = result.frames.first else { return }
+                guard let self, self.navigation == generation else { return }
+                guard let result, let first = result.frames.first else { return self.state.limitTap(direction) }
                 self.state.setProbe(result)
                 self.state.anchor(first)
             }
@@ -301,7 +305,8 @@ final class ClipController {
         guard let element = state.element(for: h) else { return }
         let generation = beginNavigation()
         probe.sibling(of: element, direction: direction, pid: p.pid, windowID: p.windowID, window: p.window) { [weak self] result in
-            guard let self, self.navigation == generation, let result, let first = result.frames.first else { return }
+            guard let self, self.navigation == generation else { return }
+            guard let result, let first = result.frames.first else { return self.state.limitTap(direction) }
             self.state.setProbe(result)
             self.state.anchor(first)
         }
@@ -808,6 +813,8 @@ final class ClipState {
     private var scrollThreshold: CGFloat = 40
     @ObservationIgnored private let haptics = ClipHaptics()
     func hoverTap() { haptics.hover() }
+    /// No sibling that way: the highlight is on the first or the last one.
+    func limitTap(_ direction: Int) { haptics.limit(direction > 0 ? .last : .first, again: true) }
 
     /// The saved clip under the pointer (newest wins), which a click removes.
     var hoveredSaved: Int? {
@@ -957,12 +964,13 @@ final class ClipState {
     /// is the window (its own level, below the smallest element), then 0 … top from the
     /// smallest element outwards. Scrolling stops at both ends, and at a level that would
     /// show the same frame (−1 and top are both the window).
-    func step(_ step: Int) {
+    func step(_ step: Int, key: Bool = false) {
         guard step != 0, !chain.isEmpty else { return }
         let current = level
         let target = min(max(current + step, 0), chain.count - 1)
         guard let now = rect(at: current), let next = rect(at: target), !next.isSame(as: now) else {
-            haptics.limit(step > 0 ? .top : .bottom)
+            // A key press at the end is felt each time. A scroll sends many events: once.
+            haptics.limit(step > 0 ? .top : .bottom, again: key)
             return
         }
         depth = target
@@ -1001,13 +1009,13 @@ extension CGRect {
 // MARK: - Haptics
 
 /// Trackpad feedback: a light tap when select mode's pointer comes onto another element, a
-/// light tap per level, and a stronger one when a
-/// scroll reaches the top or bottom level. The stronger one comes once per reach, and again
-/// only after a step away. Each one is logged (category "haptics"), so `log stream` shows
+/// light tap per level, and two strong ones when a step reaches the top or bottom level or
+/// the last sibling. A scroll gives them once per reach, and again only after a step away; a
+/// key press gives them each time. Each one is logged (category "haptics"), so `log stream` shows
 /// them on a Mac with no trackpad.
 @MainActor
 final class ClipHaptics {
-    enum Edge: String { case top, bottom }
+    enum Edge: String { case top, bottom, first, last }
 
     private let perform: (NSHapticFeedbackManager.FeedbackPattern) -> Void
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.t3notch.app", category: "haptics")
@@ -1035,10 +1043,12 @@ final class ClipHaptics {
     }
     private var lastHover = Date.distantPast
 
-    func limit(_ edge: Edge) {
-        guard atLimit != edge else { return }
+    func limit(_ edge: Edge, again: Bool = false) {
+        guard again || atLimit != edge else { return }
         atLimit = edge
         perform(.levelChange)
+        // The second one makes the end unlike a step, which is one light tap.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.11) { [perform] in perform(.levelChange) }
         log.notice("haptic limit \(edge.rawValue, privacy: .public)")
     }
 }
