@@ -280,7 +280,7 @@ final class ElementProbe: @unchecked Sendable {
 
     private func chainAt(_ p: CGPoint) -> [CGRect] {
         guard let (pid, window) = windowAt(p) else { return [] }
-        guard AXIsProcessTrusted() else { return [window] }
+        guard Permission.accessibility.isGranted else { return [window] }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.08)
         if !manualAccessibilityPids.contains(pid) {

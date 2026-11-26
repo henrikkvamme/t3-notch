@@ -45,6 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--open-settings") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.settings.open() }
         }
+        // `--permission-guide` starts the permission guide at launch, for checking it.
+        if CommandLine.arguments.contains("--permission-guide") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.panel.grantPermissions(startingWith: Permission.missing.first ?? .accessibility)
+            }
+        }
         if Store.demo {
             demo = DemoController(panel: panel, store: store)
             demo?.run()
