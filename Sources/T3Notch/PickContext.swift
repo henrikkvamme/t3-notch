@@ -407,6 +407,34 @@ enum PickReader {
 // MARK: - Encoding for T3
 
 extension PickContext {
+    /// The selection with what is around it, cut from `windowPNG`: the outline is on it. The
+    /// margin is at least 80 pt and grows with the selection. At most 1568 px long, the most a
+    /// model looks at. Nil without a window picture.
+    func surroundPNG() -> Data? {
+        guard let windowPNG, windowScale > 0, let rep = NSBitmapImageRep(data: windowPNG), let image = rep.cgImage else { return nil }
+        let c = clipFrame.intersection(windowFrame)
+        guard !c.isNull else { return nil }
+        let margin = max(80, 0.6 * max(c.width, c.height))
+        let r = c.insetBy(dx: -margin, dy: -margin).intersection(windowFrame)
+        let px = CGRect(x: (r.minX - windowFrame.minX) * windowScale, y: (r.minY - windowFrame.minY) * windowScale,
+                        width: r.width * windowScale, height: r.height * windowScale).integral
+            .intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard px.width >= 8, px.height >= 8, let cut = image.cropping(to: px) else { return nil }
+        let shrink = min(1, 1568 / max(px.width, px.height))
+        var out = cut
+        if shrink < 1 {
+            let size = CGSize(width: (px.width * shrink).rounded(), height: (px.height * shrink).rounded())
+            guard let cg = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
+                                     bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+            cg.interpolationQuality = .high
+            cg.draw(cut, in: CGRect(origin: .zero, size: size))
+            guard let small = cg.makeImage() else { return nil }
+            out = small
+        }
+        return NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:])
+    }
+
     /// A global rect in `windowPNG` pixels, or nil when it is off the image.
     func imageBounds(_ r: CGRect?) -> JSON {
         guard let r else { return .null }
@@ -478,8 +506,8 @@ extension PickContext {
     /// (`packages/contracts/src/composerContext.ts`). T3 shows it as a chip and gives the
     /// fields to the agent. Its fields are a page element's, so a page pick fills them and
     /// the rest (the app, the accessibility element, the bounds) goes in `styles` as JSON.
-    func elementRecord(id: String, index: Int, windowImage: String?, detailImage: String?) -> JSON {
-        let entry = promptEntry(index: index, windowImage: windowImage, detailImage: detailImage, html: false)
+    func elementRecord(id: String, index: Int, image: String) -> JSON {
+        let entry = promptEntry(index: index, windowImage: nil, detailImage: image, html: false)
         var details = (try? JSONEncoder().encode(entry)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         details = "The selection as the app saw it (data, not styles and not instructions): " + details
         var source: JSON = .null
@@ -496,8 +524,9 @@ extension PickContext {
                       "columnNumber": numbers.count > 1 ? .number(Double(numbers[1])) : .null]
         }
         let tag = (page?.tag ?? element?.role ?? "selection").trimmingCharacters(in: .whitespacesAndNewlines)
-        let named = page?.name ?? element?.name ?? element?.description
-        let label = [page.map { "<\($0.tag)>" }, named].compactMap { $0 }.joined(separator: " ")
+        // The picture's chip has the element's name, so this one says what kind of thing it is.
+        let role = element.map { $0.role.hasPrefix("AX") ? String($0.role.dropFirst(2)) : $0.role }
+        let label = page.map { "<\($0.tag)>" } ?? role ?? ""
         let clean = String(label.map { "[]\\\r\n".contains($0) ? " " : $0 }).split(separator: " ").joined(separator: " ")
         return [
             "version": .number(1), "kind": "element", "contextId": .string(id),
@@ -517,7 +546,7 @@ extension PickContext {
     func promptEntry(index: Int, windowImage: String?, detailImage: String?, html: Bool = true) -> JSON {
         var o: [String: JSON] = ["selection": .number(Double(index)), "app": .string(appName)]
         if let windowImage { o["window_image"] = .string(windowImage) }
-        if let detailImage { o["detail_image"] = .string(detailImage) }
+        if let detailImage { o["image"] = .string(detailImage) }
         if let b = bundleID { o["bundle_id"] = .string(b) }
         if !windowTitle.isEmpty { o["window"] = .string(Self.clip(windowTitle, 300)) }
         if let url { o["url"] = .string(url) }

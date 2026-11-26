@@ -1005,10 +1005,9 @@ final class Store {
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
     /// the attachment records `message.dispatch` takes.
-    /// Each clip as images plus a T3 `element` record with what the app knows about it: the
-    /// window with the clip outlined (carrying the app data as T3's `source`) and the
-    /// close-up. A clip with no context sends its close-up alone. Close-ups go first when
-    /// T3's limits would be passed.
+    /// Each clip as one image plus a T3 `element` record with what the app knows about it.
+    /// The image is the selection with its surroundings, outlined, or the close-up alone
+    /// when the app gave no context or T3's limits would be passed.
     static func clipUploads(_ clips: [Clip]) -> (images: [JSON], labels: [String], elements: [JSON]) {
         var images: [JSON] = []
         // What T3 writes on each image's chip, in the order of `images`.
@@ -1030,18 +1029,12 @@ final class Store {
                 labels.append("Selection \(n)")
                 continue
             }
-            var windowName: String?, detailName: String?
-            if p.window, let window = ctx.windowPNG {
-                windowName = "selection-\(n)-window.png"
-                images.append(image(windowName!, window, source: ctx.source()))
-                labels.append(ctx.windowTitle.isEmpty ? ctx.appName : "\(ctx.appName) · \(ctx.windowTitle)")
-            }
-            if p.detail {
-                detailName = "selection-\(n)-detail.png"
-                images.append(image(detailName!, clip.png))
-                labels.append(ctx.element.flatMap { $0.name ?? $0.description } ?? ctx.elementText ?? "Selection \(n)")
-            }
-            elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, windowImage: windowName, detailImage: detailName))
+            // One picture: the selection with what is around it. The whole window costs the
+            // agent many tokens and seldom says more.
+            let name = "selection-\(n).png"
+            images.append(image(name, p.window ? ctx.surroundPNG() ?? clip.png : clip.png))
+            labels.append(ctx.element.flatMap { $0.name ?? $0.description } ?? ctx.elementText ?? "Selection \(n)")
+            elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name))
         }
         return (images, labels, elements)
     }
