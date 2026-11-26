@@ -14,7 +14,7 @@ enum Handoff {
         guard !clips.isEmpty else { return }
         let pasteboard = NSPasteboard.general
         let saved = snapshot(pasteboard)
-        let trusted = AXIsProcessTrusted()
+        let trusted = Permission.accessibility.isGranted
         log("handoff: \(clips.count) clip(s) to pid \(pid), accessibility=\(trusted)")
         guard trusted else {
             // Can't paste for you: leave the first clip on the clipboard to paste by hand.

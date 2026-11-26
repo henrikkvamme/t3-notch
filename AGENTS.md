@@ -14,6 +14,10 @@ self-update. `make install` quits and replaces only the dev copy.
   to, sending, approvals, and protocol-break handling.
 - `Sources/T3Notch/NotchPanel.swift`: the panel, notch geometry, and keyboard shortcuts.
 - `Sources/T3Notch/OverlayView.swift`: the SwiftUI view.
+- `Sources/T3Notch/Permissions.swift` and `PermissionGuide.swift`: Screen Recording and Accessibility. A
+  request resets the app's own TCC entry first (a grant made under another signature shows on but never
+  matches), then asks again; the guide card sits by System Settings until both are on. Check the card with
+  `--permission-guide`.
 - `Sources/T3Notch/BuildInfo.swift`: the T3 version and commit the client was last fixed against.
 
 ## The T3 protocol in use

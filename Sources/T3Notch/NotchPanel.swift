@@ -97,7 +97,7 @@ final class PanelController {
         self.ui = OverlayUIState()
         ui.onClose = { [weak self] in self?.hide() }
         ui.onOpenInT3 = { [weak self] in self?.openInT3() }
-        ui.onOpenPermission = { permission in permission.openSettings() }
+        ui.onOpenPermission = { [weak self] permission in self?.grantPermissions(startingWith: permission) }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
@@ -181,7 +181,7 @@ final class PanelController {
         hide(returnFocus: false)
         // With clips, the text is pasted after them (see Handoff); without, the link carries it.
         let pid = store.runtime?.app?.processIdentifier
-        let pasteText = !clips.isEmpty && pid != nil && AXIsProcessTrusted()
+        let pasteText = !clips.isEmpty && pid != nil && Permission.accessibility.isGranted
         store.openTargetInT3(prompt: text.isEmpty || pasteText ? nil : text)
         guard !text.isEmpty || !clips.isEmpty, store.targetThreadId != nil else { return }
         ui.draft = ""
@@ -481,6 +481,10 @@ final class PanelController {
 
     private var clipWhenAllowed = false
     private var permissionTimer: Timer?
+    private let permissionGuide = PermissionGuide()
+
+    /// Walks through granting `first` and any other missing permission.
+    func grantPermissions(startingWith first: Permission) { permissionGuide.start(first) }
 
     /// Shows a button per missing permission and watches for grants while any are missing.
     private func showMissingPermissions() {
