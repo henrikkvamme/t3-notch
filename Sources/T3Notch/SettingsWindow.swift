@@ -86,6 +86,7 @@ final class SettingsModel {
         var quit: () -> Void
         var rebind: (Shortcut, KeyBinding) -> Bool
         var pauseShortcuts: (Bool) -> Void
+        var showWelcome: () -> Void
     }
 
     enum Shortcut { case showIsland, toggleDot, showChats, openInT3 }
@@ -249,6 +250,18 @@ private struct SettingsView: View {
             shortcutRow("Show chats", .showChats, model.showChatsKey)
             divider
             shortcutRow("Open in T3", .openInT3, model.openInT3Key)
+            divider
+            HStack {
+                Text("Welcome tour").font(.system(size: 13))
+                Spacer(minLength: 12)
+                Button { model.actions.showWelcome() } label: {
+                    Text("Show").font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10).padding(.vertical, 5).frame(minWidth: 70).contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .padding(.vertical, 6)
         }
         .padding(.horizontal, 14).padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.06)))

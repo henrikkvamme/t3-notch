@@ -79,13 +79,17 @@ final class PanelController {
 
     let panel = NotchPanel()
     let ui: OverlayUIState
-    private let store: Store
+    let store: Store
     private var geometry: NotchGeometry
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var localKeyMonitor: Any?
     private var peekHideTask: Task<Void, Never>?
     private var orderOutTask: Task<Void, Never>?
+    /// What the current tour step waits for (see Onboarding.swift).
+    var onboardingTask: Task<Void, Never>?
+    /// The Hotkey step: the shortcut has folded the island once.
+    var onboardingHidOnce = false
 
     init(store: Store) {
         self.store = store
@@ -97,6 +101,8 @@ final class PanelController {
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
+        ui.onOnboardingStep = { [weak self] step in self?.go(to: step) }
+        ui.onOnboardingPickerClosed = { [weak self] in self?.onboardingPickerClosed() }
         let host = FirstClickHostingView(rootView: OverlayView(store: store, ui: ui))
         host.sizingOptions = []
         panel.contentView = host
@@ -128,6 +134,7 @@ final class PanelController {
     var mode: Mode { ui.mode }
 
     func toggle() {
+        if ui.onboarding == .hotkey { onboardingHotkeyPressed(); return }
         ui.mode == .expanded ? hide() : expand()
     }
 
@@ -141,7 +148,7 @@ final class PanelController {
         panel.makeKey()
         animateMode(.expanded, afterLayout: wasHidden)
         // No chat focused: open straight onto the list of chats.
-        if store.targetThreadId == nil && store.connection == .connected && !ui.pickerOpen {
+        if store.targetThreadId == nil && store.connection == .connected && !ui.pickerOpen && ui.onboarding == nil {
             setPicker(true)
         } else {
             focusTextField()
@@ -334,6 +341,7 @@ final class PanelController {
 
     /// Overlay shortcuts. Returns true when the key was handled.
     private func handleKey(_ event: NSEvent) -> Bool {
+        if handleOnboardingKey(event) { return true }
         if let step = Self.vimStep(event) {
             if ui.pickerOpen { movePicker(by: step) } else { scrollReply(by: step) }
             return true

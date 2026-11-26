@@ -39,6 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rebind: { [weak self] shortcut, binding in self?.rebind(shortcut, to: binding) ?? false },
             pauseShortcuts: { [weak self] paused in
                 for h in [self?.hotkey, self?.dotHotkey] { paused ? h?.suspend() : h?.resume() }
+            },
+            showWelcome: { [weak self] in
+                self?.settings.close()
+                self?.panel.startOnboarding()
             }))
         panel.onOpenSettings = { [weak self] in self?.settings.toggle() }
         // `--open-settings` shows the card at launch, for checking its design.
@@ -52,6 +56,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let named = args.indices.contains(i + 1) ? Permission(rawValue: args[i + 1]) : nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 self?.panel.grantPermissions(startingWith: named ?? Permission.missing.first ?? .accessibility)
+            }
+        }
+        // The welcome tour: on first launch, resuming an unfinished one, or with
+        // `--onboarding [welcome|connect|hotkey|chats|tips|done]`.
+        if let i = args.firstIndex(of: "--onboarding") {
+            let step = args.indices.contains(i + 1)
+                ? OnboardingStep.allCases.first { "\($0)" == args[i + 1] } ?? .welcome : .welcome
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.panel.startOnboarding(at: step) }
+        } else if Onboarding.startsAtLaunch, let step = Onboarding.saved {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                self?.panel.startOnboarding(at: step == .done ? .welcome : step)
             }
         }
         if Store.demo {
