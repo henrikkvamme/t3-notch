@@ -11,6 +11,8 @@ import Carbon.HIToolbox
 final class SelectTrigger {
     /// Longest press that still counts as a tap.
     static let maxTap: TimeInterval = 0.4
+    /// The keys of the tap, as the welcome tour draws them. Change them with `flagsChanged`.
+    static let keycaps = [KeyCap(symbol: "⌃", name: "control"), KeyCap(symbol: "⌥", name: "option")]
 
     private let onTap: () -> Void
     private var monitors: [Any] = []

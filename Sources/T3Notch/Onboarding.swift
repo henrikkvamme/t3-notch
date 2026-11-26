@@ -4,12 +4,14 @@ import ServiceManagement
 import SwiftUI
 
 /// The welcome tour. It runs inside the island on first launch and teaches by doing: connect to
-/// T3, press the island's shortcut, open the chat list, then a card with the other keys.
+/// T3, press the island's shortcut, open the chat list, select something on screen, then a card
+/// with the other keys.
 enum OnboardingStep: Int, CaseIterable {
-    case welcome, connect, hotkey, chats, tips, done
+    // The raw value is saved to resume the tour, so a new step goes last here.
+    case welcome, connect, hotkey, chats, tips, done, select
 
     /// The steps in the order the tour shows them, one progress dot each.
-    static let tour: [OnboardingStep] = [.welcome, .connect, .hotkey, .chats, .tips]
+    static let tour: [OnboardingStep] = [.welcome, .connect, .hotkey, .chats, .select, .tips]
 
     /// The step after this one.
     var next: OnboardingStep {
@@ -66,6 +68,10 @@ enum Onboarding {
     }
     static let t3Download = URL(string: "https://github.com/pingdotgg/t3code/releases/latest")!
 
+    /// Whether select mode can run now. Without its permissions the Select step still takes
+    /// the tap; select mode asks for them when it is first used.
+    static var canSelect: Bool { Permission.screenRecording.isGranted && Permission.accessibility.isGranted }
+
     static func openT3() {
         guard let url = t3AppURL else { NSWorkspace.shared.open(t3Download); return }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
@@ -109,6 +115,8 @@ extension PanelController {
 
     /// Moves to `step`, saves it so a relaunch resumes there, and starts what the step waits for.
     func go(to step: OnboardingStep) {
+        // The tap is off (its setting, VoiceOver, a password field): nothing to teach.
+        if step == .select, !SelectTrigger.enabled { go(to: step.next); return }
         Onboarding.save(step)
         onboardingTask?.cancel()
         withAnimation(Motion.content) {
@@ -145,7 +153,7 @@ extension PanelController {
             }
         case .hotkey:
             onboardingHidOnce = false
-        case .chats, .tips:
+        case .chats, .select, .tips:
             break
         case .done:
             onboardingTask = Task { [weak self] in
@@ -215,6 +223,27 @@ extension PanelController {
             guard let self, !Task.isCancelled, self.ui.onboarding == .chats else { return }
             self.setPicker(true)
         }
+    }
+
+    /// The Select step: the tap lights its keys, then starts the real select mode.
+    func onboardingSelectTapped() {
+        guard !ui.onboardingKeysLit else { return }
+        celebrate()
+        let real = Onboarding.canSelect
+        onboardingTask?.cancel()
+        onboardingTask = Task { [weak self] in
+            // The wave runs out first. With nothing to try, the words get time to be read.
+            try? await Task.sleep(for: .milliseconds(real ? 850 : 1800))
+            guard let self, !Task.isCancelled, self.ui.onboarding == .select else { return }
+            if real { self.startSelecting(inTour: true) } else { self.go(to: OnboardingStep.select.next) }
+        }
+    }
+
+    /// Select mode ended during the Select step, with or without picks.
+    func onboardingSelectEnded() {
+        guard ui.onboarding == .select else { return }
+        expand()
+        go(to: OnboardingStep.select.next)
     }
 
     /// One of the keys card's shortcuts was pressed. It ticks off instead of acting, and the
@@ -323,6 +352,7 @@ struct OnboardingView: View {
         case .connect: connect
         case .hotkey: hotkey
         case .chats: chats
+        case .select: select
         case .tips: tips
         case .done: done
         }
@@ -383,6 +413,14 @@ struct OnboardingView: View {
         keyStep(Settings.showChatsKey.keycaps,
                 title: ui.onboardingKeysLit ? "Your chats" : "Open your chats",
                 caption: "Pick one. Its replies show up here.")
+    }
+
+    private var select: some View {
+        let lit = ui.onboardingKeysLit
+        return keyStep(SelectTrigger.keycaps,
+                       title: lit ? (Onboarding.canSelect ? "Now pick something" : "That starts select mode")
+                                  : "Select anything on screen",
+                       caption: lit ? "What you pick goes into your message." : "Tap both keys at once, in any app.")
     }
 
     private var tips: some View {

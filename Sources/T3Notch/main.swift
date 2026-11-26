@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // The welcome tour: on first launch, resuming an unfinished one, or with
-        // `--onboarding [welcome|connect|hotkey|chats|tips|done]`.
+        // `--onboarding [welcome|connect|hotkey|chats|select|tips|done]`.
         if let i = args.firstIndex(of: "--onboarding") {
             let step = args.indices.contains(i + 1)
                 ? OnboardingStep.allCases.first { "\($0)" == args[i + 1] } ?? .welcome : .welcome

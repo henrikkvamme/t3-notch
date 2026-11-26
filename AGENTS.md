@@ -19,6 +19,8 @@ self-update. `make install` quits and replaces only the dev copy.
 - `Sources/T3Notch/Onboarding.swift`: the welcome tour, in the island. Real key presses drive it. A step's
   success is one moment: the keys bottom out and spring back, light spreads from the last key, the island
   stretches, and a note and a trackpad tap land with it. Check a step with `--onboarding [step]`.
+  Its Select step takes the tap of `SelectTrigger` and then starts the real select mode; it draws the keys
+  from `SelectTrigger.keycaps` and is left out while the tap is off.
 - `Sources/T3Notch/BuildInfo.swift`: the T3 version and commit the client was last fixed against.
 
 ## The T3 protocol in use
