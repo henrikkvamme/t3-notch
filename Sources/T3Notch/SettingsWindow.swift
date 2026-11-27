@@ -143,6 +143,9 @@ final class SettingsModel {
     var expandOnHover = Settings.expandOnHover {
         didSet { Settings.expandOnHover = expandOnHover }
     }
+    var controlOptionSelect = Settings.controlOptionSelect {
+        didSet { Settings.controlOptionSelect = controlOptionSelect }
+    }
     var launchAtLogin = SMAppService.mainApp.status == .enabled
     var checking = false
     var upToDate = false
@@ -158,6 +161,7 @@ final class SettingsModel {
         showWhenChatFinishes = Settings.showWhenChatFinishes
         showToolSteps = Settings.showToolSteps
         expandOnHover = Settings.expandOnHover
+        controlOptionSelect = Settings.controlOptionSelect
         launchAtLogin = SMAppService.mainApp.status == .enabled
         upToDate = false
     }
@@ -272,6 +276,9 @@ private struct SettingsView: View {
                 isOn: $model.showWhenChatFinishes)
             divider
             row("Show commands while working", isOn: $model.showToolSteps)
+            divider
+            row("Select with ⌃⌥", caption: "Tap Control and Option in any app to select what is under the pointer",
+                isOn: $model.controlOptionSelect)
             divider
             row("Hide status dot", isOn: Binding(get: { model.ui.dotHiddenByUser }, set: { model.ui.dotHiddenByUser = $0 }))
             divider
