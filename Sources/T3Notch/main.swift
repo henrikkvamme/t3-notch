@@ -34,6 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Finished replies fade; requests that block the agent stay until handled.
             self.panel.peek(autoHide: reason == .finished)
         }
+        store.onAttentionElsewhere = { [weak self] key in
+            guard let self, self.panel.mode == .hidden, self.store.holdsTarget?() != true else { return }
+            if let t3 = self.store.runtime?.app?.processIdentifier, T3Visibility.isInView(pid: t3) { return }
+            // The island holds nothing: it goes to the chat that waits, and shows its request.
+            self.store.focusForAttention(key)
+            self.store.onAttentionNeeded?(.needsYou)
+        }
         statusDot = StatusDotController(store: store, ui: panel.ui,
                                         onClick: { [weak self] in self?.panel.expand() },
                                         onRightClick: { [weak self] in self?.settings.toggle() })

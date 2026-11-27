@@ -60,6 +60,8 @@ struct DraftField: NSViewRepresentable {
             withAnimation(Motion.content) { ui.editingClip = ui.editingClip == id ? nil : id }
             ui.onRequestFocus?()
         }
+        // A picture pasted or dropped in the field is a selection too.
+        text.onPictures = { clips in withAnimation(Motion.snappy) { ui.clips += clips } }
         // The pointer on a chip shows its picture above the field.
         text.onChipHover = { id in
             guard ui.hoveredClip != id else { return }
@@ -125,6 +127,10 @@ struct DraftField: NSViewRepresentable {
                 && now.chips.map(\.label) == labels
                 && now.chips.allSatisfy { $0.editing == (ui.editingClip == $0.id) }
             if !same {
+                // Only how a chip looks changed (its label, its open state): the text is the same,
+                // so what you can undo is too.
+                let looksOnly = now.plain == ui.draft && now.chips.map(\.id) == clips.map(\.id)
+                    && zip(now.chips, clips).allSatisfy { $0.offset == $1.offset }
                 let old = now.plain as NSString, new = ui.draft as NSString
                 // The text changed from outside (T3's field, a message that came back): a chip
                 // before the change stays, a chip after it moves with the text.
@@ -166,7 +172,7 @@ struct DraftField: NSViewRepresentable {
                 applying = true
                 storage.setAttributedString(built)
                 text.typingAttributes = DraftField.attributes
-                text.undoManager?.removeAllActions()
+                if !looksOnly { text.undoManager?.removeAllActions() }
                 let end = NSRange(location: caretAfter ?? built.length, length: 0)
                 text.setSelectedRange(keep.map { NSRange(location: min($0.location, built.length), length: 0) } ?? end)
                 applying = false
@@ -296,8 +302,43 @@ struct DraftField: NSViewRepresentable {
 final class DraftTextView: NSTextView {
     var onChipClick: ((UUID) -> Void)?
     var onChipHover: ((UUID?) -> Void)?
+    var onPictures: (([Clip]) -> Void)?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// The pictures on a pasteboard: copied image data (a screenshot), or image files.
+    private static func pictures(on pasteboard: NSPasteboard) -> [Clip] {
+        var images: [NSImage] = []
+        let files = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if !files.isEmpty {
+            images = files.compactMap { NSImage(contentsOf: $0) }
+            guard images.count == files.count else { return [] } // a file that is no picture: not ours
+        } else if pasteboard.availableType(from: [.string]) == nil,
+                  let image = NSImage(pasteboard: pasteboard) {
+            images = [image]
+        }
+        return images.compactMap { image in
+            guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]) else { return nil }
+            return Clip(png: png, thumbnail: image)
+        }
+    }
+
+    override func paste(_ sender: Any?) {
+        let clips = Self.pictures(on: .general)
+        if clips.isEmpty { super.paste(sender) } else { onPictures?(clips) }
+    }
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + [.fileURL, .png, .tiff]
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let clips = Self.pictures(on: sender.draggingPasteboard)
+        guard !clips.isEmpty else { return super.performDragOperation(sender) }
+        onPictures?(clips)
+        return true
+    }
 
     /// The chip under a point of this view.
     private func chip(at point: NSPoint) -> UUID? {

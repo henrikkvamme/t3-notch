@@ -202,6 +202,7 @@ final class PanelController {
         draftOwner = key
         syncedDraft = nil
         ui.clipDepth = 0
+        ui.replyScroll.scrollTo(edge: .top) // a new chat starts at the top of its reply
         show(next)
         ui.draftChats = shelf.chats
     }
@@ -260,6 +261,16 @@ final class PanelController {
                      NSWorkspace.sessionDidResignActiveNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.leave(always: true) }
+            }
+        }
+        // A display went away or changed: the open island goes to a display that is there.
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.ui.mode != .hidden else { return }
+                let centre = NSPoint(x: self.panel.frame.midX, y: self.panel.frame.maxY - 1)
+                self.place(on: NSScreen.screens.first { NSMouseInRect(centre, $0.frame, false) }
+                           ?? NotchGeometry.screenUnderMouse())
             }
         }
         DistributedNotificationCenter.default().addObserver(

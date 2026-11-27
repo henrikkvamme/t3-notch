@@ -168,13 +168,16 @@ final class StatusDotController {
 
     private func place() {
         let notch = NotchGeometry.forScreen(Self.dotScreen).notchRect
-        panel.setFrame(NSRect(x: notch.maxX, y: notch.minY, width: Self.width, height: notch.height), display: true)
+        let width = Self.width + (StatusDotView.marked(ui) ? StatusDotView.markWidth : 0)
+        panel.setFrame(NSRect(x: notch.maxX, y: notch.minY, width: width, height: notch.height), display: true)
     }
 
     /// Keeps click-through in step with whether a dot is showing.
     private func observe() {
         withObservationTracking {
             panel.ignoresMouseEvents = StatusDotView.effective(store: store, ui: ui) == .hidden
+            // Room for the mark of waiting selections, only while it shows.
+            place()
         } onChange: {
             Task { @MainActor [weak self] in self?.observe() }
         }
@@ -207,10 +210,35 @@ private struct StatusDotView: View {
         ui.mode == .hidden && !ui.notchScreenFullscreen && !ui.dotHiddenByUser ? store.indicator : .hidden
     }
 
+    static let markWidth: CGFloat = 14
+
+    /// Selections wait in the island for the next message.
+    static func marked(_ ui: OverlayUIState) -> Bool { ui.mode == .hidden && !ui.clips.isEmpty }
+
     @State private var hovering = false
 
     var body: some View {
         let indicator = Self.effective(store: store, ui: ui)
+        let marked = Self.marked(ui) && indicator != .hidden
+        HStack(spacing: 0) {
+            dot(indicator).frame(width: 44)
+            if marked {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: Self.markWidth, alignment: .leading)
+                    .offset(x: -8)
+                    .transition(.blurReplace.combined(with: .scale(0.4)))
+            }
+        }
+        .animation(Motion.snappy, value: marked)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(perform: onClick)
+    }
+
+    private func dot(_ indicator: Store.Indicator) -> some View {
         StatusDotGlyph(indicator: indicator)
             // Wait for the island to shrink into the notch before popping back out.
             .animation(indicator == .hidden ? Motion.snappy : Motion.open.delay(0.22), value: indicator == .hidden)
@@ -221,10 +249,7 @@ private struct StatusDotView: View {
                     .scaleEffect(hovering ? 1 : 0.6)
             }
             .animation(Motion.snappy, value: hovering)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .onTapGesture(perform: onClick)
+            .frame(maxHeight: .infinity)
     }
 }
 

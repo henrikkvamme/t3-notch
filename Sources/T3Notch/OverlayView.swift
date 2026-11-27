@@ -165,6 +165,10 @@ struct OverlayView: View {
                         .transition(.blurReplace)
                 } else if store.connection != .connected {
                     connectionLine.transition(.blurReplace)
+                    // What you wrote stays in view and can be changed while T3 is away.
+                    if ui.mode == .expanded && (!ui.draft.isEmpty || !ui.clips.isEmpty) {
+                        input.transition(.blurReplace)
+                    }
                 } else if compact, let thread = store.targetThread {
                     // The same facts as the chat's row in T3's sidebar.
                     ThreadRow(thread: thread, project: store.project(for: thread), now: Date())

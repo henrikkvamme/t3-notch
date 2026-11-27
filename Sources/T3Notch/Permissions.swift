@@ -99,6 +99,9 @@ enum Permission: String, CaseIterable, Identifiable {
     /// content query also counts.
     nonisolated(unsafe) private static var screenRecordingConfirmed = false
 
+    /// A capture came back empty: the grant may be gone. The next check asks macOS again.
+    static func screenCaptureFailed() { screenRecordingConfirmed = false }
+
     static func confirmScreenRecordingLive() async {
         guard !screenRecordingConfirmed, !CGPreflightScreenCaptureAccess() else { return }
         if (try? await SCShareableContent.current) != nil { screenRecordingConfirmed = true }

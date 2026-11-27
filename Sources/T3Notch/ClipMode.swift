@@ -732,6 +732,20 @@ final class ClipController {
             self.state.pointer = p
             self.state.resetLevel()
             self.state.setProbe(result)
+            self.refreeze()
+        }
+    }
+
+    /// The screen may have changed since the first click: the picture of a new pick is taken
+    /// now, so it shows what you picked. The overlays are not in it.
+    private func refreeze() {
+        captured = false
+        Task { [weak self, shareable] in
+            let frozen = await ScreenCapture.screens(await shareable?.value)
+            guard let self, !self.finished else { return }
+            if !frozen.isEmpty { self.state.frozen = frozen }
+            self.captured = true
+            if let steer = self.sendWhenFrozen { self.send(steer: steer) }
         }
     }
 
@@ -763,6 +777,7 @@ final class ClipController {
             sending = steer
             select?.onPick(clip.thumbnail, rect)
         } else {
+            Permission.screenCaptureFailed()
             unsent = true
         }
         finish()

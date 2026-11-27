@@ -295,7 +295,7 @@ final class Store {
     var lastSendError: String?
     /// A run started from the overlay finished and the overlay hasn't been opened since.
     private(set) var unseenReply = false
-    func markReplySeen() { unseenReply = false }
+    func markReplySeen() { unseenReply = false; doneElsewhere = [] }
 
     /// The status shown by the dot next to the notch while the overlay is hidden.
     enum Indicator: Equatable { case hidden, idle, running, awaitingInput, needsYou, failed, done }
@@ -305,10 +305,40 @@ final class Store {
         guard connection == .connected, targetThread != nil else { return protocolBreak != nil ? .needsYou : .idle }
         if let request = pendingRequest { return request.kind == "user_input" ? .awaitingInput : .needsYou }
         if protocolBreak != nil { return .needsYou }
+        // Another chat waits for you: that weighs more than this chat's run.
+        if !waitingElsewhere.isEmpty { return .needsYou }
         if isTargetActive { return .running }
         if targetStatus == "failed" { return .failed }
-        if unseenReply { return .done }
+        if unseenReply || !doneElsewhere.isEmpty { return .done }
         return .idle
+    }
+
+    /// Other chats that wait for an approval or an answer.
+    var waitingElsewhere: [String] {
+        if let cached = waitingCache, cached.version == shellVersion, cached.target == targetThreadId { return cached.keys }
+        let keys = sidebarThreads.compactMap { t -> String? in
+            let request = t["pendingRuntimeRequest"]
+            guard let key = t["key"].string, key != targetThreadId, request["id"].string != nil,
+                  request["blocking"].bool ?? true else { return nil }
+            return key
+        }
+        waitingCache = (shellVersion, targetThreadId, keys)
+        return keys
+    }
+    @ObservationIgnored private var waitingCache: (version: Int, target: String?, keys: [String])?
+
+    /// Other chats that got a message from the island and have finished since.
+    private(set) var doneElsewhere: Set<String> = []
+    /// Chats that got a message from the island and still run.
+    @ObservationIgnored private var sentTo: Set<String> = []
+    /// Another chat waits for you. The island goes to it when it holds no work.
+    var onAttentionElsewhere: ((String) -> Void)?
+
+    /// Makes this chat the focused one because it asks for you. T3's window stays as it is.
+    func focusForAttention(_ key: String) {
+        followingT3 = true
+        focusedThreadId = key
+        followingT3 = false
     }
 
     /// Fired when the overlay should show itself without focus (run finished or needs you).
@@ -1000,9 +1030,20 @@ final class Store {
     }
 
     private func noticeTransition(id: String, old: JSON?, new: JSON?) {
-        guard id == targetThreadId, let new else { return }
+        guard let new else { return }
         let wasRequest = old?["pendingRuntimeRequest"]["id"].string
         let request = new["pendingRuntimeRequest"]
+        guard id == targetThreadId else {
+            if let rid = request["id"].string, rid != wasRequest, request["blocking"].bool ?? true {
+                onAttentionElsewhere?(id)
+            }
+            let active: Set<String> = ["preparing", "queued", "starting", "running", "waiting"]
+            let was = old?["activityRunStatus"].string ?? old?["status"].string ?? ""
+            let now = new["activityRunStatus"].string ?? new["status"].string ?? ""
+            if active.contains(was), !active.contains(now), sentTo.remove(id) != nil { doneElsewhere.insert(id) }
+            return
+        }
+        sentTo.remove(id)
         if let rid = request["id"].string, rid != wasRequest, request["blocking"].bool ?? true {
             onAttentionNeeded?(.needsYou)
             return
@@ -1099,6 +1140,7 @@ final class Store {
             }
             _ = try await target.rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = key
+            sentTo.insert(key)
             sent = true
         } catch {
             handleCommandError(error)

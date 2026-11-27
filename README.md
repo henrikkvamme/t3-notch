@@ -30,7 +30,13 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
   comment, and ⏎ puts the picture of it with your comment in the island, ready to send to the chat. The island
   does not have to be open.
 - **Answer approvals.** When the agent asks for permission or has a question, the island opens with the
-  request. ⏎ accepts, ⌘⏎ accepts for the session, ⎋ declines.
+  request. ⏎ accepts, ⌘⏎ accepts for the session, ⌘⌫ declines. ⎋ only closes the island, and ⏎ accepts
+  only when the message field is empty and the request has been in view for a moment. A request in another
+  chat opens that chat when the island is closed and holds no draft; else the dot shows it.
+- **Nothing is lost.** Each chat keeps its own draft and selections, also after a restart. A click outside the
+  island or a switch to another app closes it and keeps the draft; the pin in the header keeps it open. A
+  paperclip beside the dot shows that selections wait in the island. A message that could not be sent comes
+  back with Retry.
 - **Hand off to T3.** ⌘O opens the chat in T3 and carries your draft text and clips into T3's chat box.
 - **Status dot.** While the island is hidden, a dot right of the notch shows the chat's state. It hides while
   an app is fullscreen.
@@ -134,14 +140,17 @@ Releases are built by CI; see [RELEASING.md](RELEASING.md).
 | ⌥Space | Show or hide the island (rebind in settings) |
 | ⏎ | Send, steering the running turn (or queue after it, if set so in settings). Accepts a pending approval when the input is empty |
 | ⌘⏎ | Send the other way: queue after the running turn (or steer). Accepts an approval for the session when one is showing |
-| ⎋ | Decline a pending approval, otherwise close |
+| ⎋ | Back one step, then close. It never declines |
+| ⌘⌫ | Decline a pending approval |
+| ⌘W | Close the island |
+| Page Up / Page Down | Scroll the reply |
 | ⌘K | Pick the chat (rebind in settings) |
 | ⌘P | Clip part of the screen into the next message |
 | Hold ⌃⌥ | Select mode, from any app: point, click, comment, ⏎ (turn off in settings) |
 | ⌘O | Open the chat in T3, taking the draft and clips along (rebind in settings) |
 | ⌘. | Stop the running agent |
-| ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list, or scroll the reply |
-| ⌘Z / ⌃Z | Bring back a removed clip |
+| ⌃J ⌃N / ⌃K ⌃P | Down / up in the chat list. With an empty message field: scroll the reply |
+| ⌘V | Paste. A copied picture becomes a selection (you can also drop a picture on the field) |
 | ⌥⇧Space | Hide or show the status dot, from any app (rebind in settings) |
 | ⌘, | Open settings (also: right-click the status dot) |
 
