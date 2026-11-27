@@ -8,7 +8,7 @@ import os
 /// A screen region added as context: the cropped PNG plus a thumbnail for the island, and
 /// what the agent should know about it (filled in shortly after the clip is taken).
 struct Clip: Identifiable, Equatable {
-    let id = UUID()
+    var id = UUID()
     let png: Data
     let thumbnail: NSImage
     var context: PickContext?
@@ -72,6 +72,10 @@ final class ClipController {
     private var sendWhenFrozen: Bool?
     /// The screens are captured (or could not be), after the click.
     private var captured = false
+    /// Typed between the click and the comment field's focus.
+    private var earlyKeys = ""
+    /// Another app took the keyboard with a comment written: the selection is kept.
+    private var kept = false
     /// ⏎ was pressed: the selection goes to the chat (true steers).
     private var sending: Bool?
     /// The chat that showed when ⏎ was pressed. The end can come a second later, and the
@@ -122,6 +126,9 @@ final class ClipController {
         /// The screen could not be captured (Screen Recording is off), so there is no
         /// selection to send. The comment goes to the island.
         case unsent(comment: String)
+        /// Another app took the keyboard while a comment was written: the selection and the
+        /// comment wait in the island, which stays closed.
+        case kept(Clip, comment: String)
     }
 
     private init(select: Select? = nil, onFinish: @escaping ([Clip], Int) -> Void) {
@@ -412,7 +419,9 @@ final class ClipController {
         let deliver = { [self] in
             guard let select else { onFinish(state.clips, state.depth); return }
             let comment = state.comment.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let steer = sending, let clip = state.clips.first {
+            if kept, let clip = state.clips.first {
+                select.onEnd(.kept(clip, comment: comment))
+            } else if let steer = sending, let clip = state.clips.first {
                 select.onEnd(.send(clip, comment: comment, steer: steer, to: sendTo))
             } else {
                 select.onEnd(unsent ? .unsent(comment: comment) : released ? .released : .cancelled)
@@ -446,7 +455,7 @@ final class ClipController {
         // The tap sees the keys go up in order with the clicks. The hold trigger's events come
         // another way and can pass a click on a busy main thread.
         let events: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel,
-                                     .flagsChanged]
+                                     .flagsChanged, .keyDown]
         guard let tap = EventTap(events, handler: { [weak self] type, event in self?.tapped(type, event) ?? false })
         else { return false }
         self.tap = tap
@@ -508,6 +517,17 @@ final class ClipController {
     /// An event the tap saw. Returns true to keep it from the app under the pointer.
     private func tapped(_ type: CGEventType, _ event: CGEvent) -> Bool {
         guard !finished else { return false }
+        if type == .keyDown {
+            // Before the click, a key is the app's. After it, what you type is the comment: the
+            // field takes the keyboard a moment later and gets these keys then.
+            guard state.phase != .hover else { return false }
+            if !event.flags.contains(.maskCommand), !event.flags.contains(.maskControl),
+               let chars = NSEvent(cgEvent: event)?.characters,
+               chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
+                earlyKeys += chars
+            }
+            return true
+        }
         // Clicked, and the screens are being captured: keep the button and the scroll from
         // the app until the overlays take them.
         guard state.phase == .hover else { return type != .mouseMoved && type != .flagsChanged }
@@ -601,6 +621,8 @@ final class ClipController {
         guard state.phase == .annotate, !finished, let tap else { return }
         tap.stop()
         self.tap = nil
+        state.comment += earlyKeys
+        earlyKeys = ""
         for w in windows { w.ignoresMouseEvents = false }
         let front = NSWorkspace.shared.frontmostApplication
         if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
@@ -624,11 +646,23 @@ final class ClipController {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self, !self.windows.contains(where: \.isKeyWindow) else { return }
-                    self.finish()
+                    self.interrupted()
                 }
             }
         }
         focusComment()
+    }
+
+    /// Going to another app is not a wish to delete what you wrote: the selection and its
+    /// comment go to the island and wait there.
+    private func interrupted() {
+        if captured, !finished, !state.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let rect = state.selection, let clip = state.crop(rect) {
+            state.clips = [clip]
+            readContext(of: clip.id, rect: rect)
+            kept = true
+        }
+        finish()
     }
 
     /// Gives the keyboard to the comment field, on the screen that shows it now.

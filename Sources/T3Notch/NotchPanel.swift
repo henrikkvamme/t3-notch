@@ -109,7 +109,8 @@ final class PanelController {
         ui.onOpenInT3 = { [weak self] in self?.openInT3() }
         ui.onOpenPermission = { [weak self] permission in self?.grantPermissions(startingWith: permission) }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
-        ui.onDraftSent = { [weak self] in self?.draftSent() }
+        ui.onSend = { [weak self] in self?.sendDraft(steer: Settings.enterSteers) }
+        ui.onRetrySend = { [weak self] in self?.retrySend() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
         ui.onOnboardingStep = { [weak self] step in self?.go(to: step) }
@@ -153,8 +154,80 @@ final class PanelController {
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
         }
         ui.onSubmitAnswers = { [weak self] in self?.submitAnswers() }
+        startDrafts()
         watchRequest()
         watchLeaving()
+    }
+
+    // MARK: - A draft for each chat
+
+    private let shelf = DraftShelf()
+    /// The chat the island's message and selections are for.
+    private var draftOwner: String?
+
+    private var liveDraft: ChatDraft { ChatDraft(text: ui.draft, clips: ui.clips) }
+
+    private func startDrafts() {
+        draftOwner = store.focusedThreadId
+        if let owner = draftOwner, let draft = shelf.take(owner) { show(draft) }
+        ui.draftChats = shelf.chats
+        store.onFocusChange = { [weak self] key in self?.targetChanged(to: key) }
+        watchDraft()
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.shelf.saveNow(live: self.liveDraft, owner: self.draftOwner ?? self.store.focusedThreadId)
+            }
+        }
+    }
+
+    private func show(_ draft: ChatDraft) {
+        ui.editingClip = nil
+        ui.hoveredClip = nil
+        ui.draft = draft.text
+        ui.clips = draft.clips
+    }
+
+    /// Another chat is the focused one. What you wrote stays with the chat you wrote it for,
+    /// and the island shows what waits for the new chat.
+    private func targetChanged(to key: String?) {
+        guard let key, key != draftOwner else { return }
+        var next = shelf.take(key) ?? ChatDraft()
+        if let old = draftOwner {
+            shelf.put(liveDraft, for: old)
+        } else {
+            next = liveDraft.after(next) // written with no chat: it is for the first one you pick
+        }
+        draftOwner = key
+        syncedDraft = nil
+        ui.clipDepth = 0
+        show(next)
+        ui.draftChats = shelf.chats
+    }
+
+    /// Saves the drafts when the island's own changes.
+    private func watchDraft() {
+        withObservationTracking { _ = (ui.draft, ui.clips.map { [$0.comment, "\($0.offset ?? -1)"] }) } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.shelf.save(live: self.liveDraft, owner: self.draftOwner ?? self.store.focusedThreadId)
+                self.watchDraft()
+            }
+        }
+    }
+
+    /// Work that left the island and did not arrive comes back to its chat: into the island
+    /// when it shows that chat, or when the island holds nothing else.
+    private func bringBack(_ draft: ChatDraft, to key: String) {
+        if draftOwner == key || draftOwner == nil {
+            draftOwner = key
+            show(liveDraft.after(draft))
+        } else {
+            shelf.put(draft, for: key)
+            if liveDraft.isEmpty { store.focusedThreadId = key }
+        }
+        ui.draftChats = shelf.chats
     }
 
     // MARK: - Leaving
@@ -265,6 +338,7 @@ final class PanelController {
 
     func expand() {
         peekHideTask?.cancel()
+        ui.sendFailed = false
         // A chat opened in T3 while the island held work for another chat.
         store.focusLastOpened()
         store.markReplySeen()
@@ -322,13 +396,22 @@ final class PanelController {
         let clips = ui.clips
         hide(returnFocus: false)
         // With clips, the text is pasted after them (see Handoff); without, the link carries it.
+        // A paste needs T3 running and Accessibility: without them the selections stay here.
         let pid = store.runtime?.app?.processIdentifier
-        let pasteText = !clips.isEmpty && pid != nil && Permission.accessibility.isGranted
-        store.openTargetInT3(prompt: text.isEmpty || pasteText ? nil : text)
-        guard !text.isEmpty || !clips.isEmpty, store.targetThreadId != nil else { return }
+        let pasteClips = !clips.isEmpty && pid != nil && Permission.accessibility.isGranted
+        store.openTargetInT3(prompt: text.isEmpty || pasteClips ? nil : text)
+        guard !text.isEmpty || !clips.isEmpty, let chat = store.targetThreadId else { return }
         ui.draft = ""
-        ui.clips = []
-        if let pid { Handoff.pasteClips(clips, text: pasteText ? text : "", into: pid) }
+        ui.clips = pasteClips ? [] : clips.map { clip in
+            var clip = clip
+            clip.offset = nil
+            return clip
+        }
+        guard pasteClips, let pid else { return }
+        Handoff.pasteClips(clips, text: text, into: pid) { [weak self] arrived in
+            // T3 never came to the front: nothing was pasted, so it is all still yours.
+            if !arrived { self?.bringBack(ChatDraft(text: text, clips: clips), to: chat) }
+        }
     }
 
     /// Gives keyboard focus back to the app you were in, if the island had taken it.
@@ -354,6 +437,7 @@ final class PanelController {
             ui.pickerQuery = ""
         }
         ui.peekSticky = false
+        ui.sendFailed = false
         ui.overHeaderButton = false
         panel.ignoresMouseEvents = true
         stopMouseTimer()
@@ -378,12 +462,12 @@ final class PanelController {
     private let draftLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "dev.t3notch.app", category: "draft")
 
     /// T3's message field for the island's chat: only while T3's window shows that chat.
-    private var composerTarget: (pid: pid_t, title: String)? {
+    private var composerTarget: (pid: pid_t, title: String, chat: String)? {
         guard Settings.syncDraft, Permission.accessibility.isGranted, ui.onboarding == nil, !Store.demo,
               let id = store.targetThreadId, store.chatShownInT3 == id,
               let title = store.targetTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty,
               let pid = store.runtime?.app?.processIdentifier else { return nil }
-        return (pid, title)
+        return (pid, title, id)
     }
 
     /// Two drafts are one when only the white space at the end differs.
@@ -440,12 +524,27 @@ final class PanelController {
         draftSyncBusy = true
         // You typed in the island: T3's field takes it.
         if let synced = syncedDraft, !Self.sameDraft(mine, synced) {
-            composer.write(mine, pid: target.pid, chatTitle: target.title) { [weak self] now in
+            // Look first: text typed in T3 since the last round must not be written over.
+            composer.read(pid: target.pid, chatTitle: target.title) { [weak self] theirs in
                 guard let self else { return }
-                self.draftSyncBusy = false
-                self.syncedDraft = now
-                if let now, !Self.sameDraft(now, mine) {
-                    self.draftLog.notice("T3 keeps the draft differently: wrote \(mine.count, privacy: .public), has \(now.count, privacy: .public)")
+                guard let theirs, self.composerTarget?.chat == target.chat, self.ui.draft == mine,
+                      Self.sameDraft(theirs, synced) || Self.sameDraft(theirs, mine) else {
+                    // The chat changed, you typed on, or both sides changed: they stay apart.
+                    self.draftSyncBusy = false
+                    if self.composerTarget?.chat != target.chat || theirs.map({ !Self.sameDraft($0, synced) }) ?? true {
+                        self.syncedDraft = nil
+                    }
+                    return
+                }
+                self.composer.write(mine, pid: target.pid, chatTitle: target.title) { [weak self] now in
+                    guard let self else { return }
+                    self.draftSyncBusy = false
+                    // The answer is for the chat it was written to, not for the one shown now.
+                    guard self.composerTarget?.chat == target.chat else { self.syncedDraft = nil; return }
+                    self.syncedDraft = now
+                    if let now, !Self.sameDraft(now, mine) {
+                        self.draftLog.notice("T3 keeps the draft differently: wrote \(mine.count, privacy: .public), has \(now.count, privacy: .public)")
+                    }
                 }
             }
             return
@@ -454,7 +553,7 @@ final class PanelController {
             guard let self else { return }
             self.draftSyncBusy = false
             // No field, T3 moved to another chat, or you typed while T3 answered.
-            guard let text, self.composerTarget?.title == target.title, self.ui.draft == mine else {
+            guard let text, self.composerTarget?.chat == target.chat, self.ui.draft == mine else {
                 if text == nil { self.syncedDraft = nil }
                 return
             }
@@ -555,7 +654,7 @@ final class PanelController {
         guard ui.hovering != hovering else { return }
         ui.hovering = hovering
         // A request's peek stays until the request is handled or you fold it away.
-        let waits = ui.peekSticky && store.pendingRequest != nil
+        let waits = ui.peekSticky && (store.pendingRequest != nil || ui.sendFailed)
         if ui.mode == .peek, !hovering, !waits { schedulePeekHide(after: Self.peekLeaveDelay) }
         if hovering { peekHideTask?.cancel() }
     }
@@ -733,6 +832,10 @@ final class PanelController {
         withAnimation(Motion.snappy) { ui.replyScroll.scrollTo(y: y) }
     }
 
+    private var lastSteer = false
+
+    /// ⏎ and ⌘⏎: the message leaves and the island closes. A message that cannot go now
+    /// stays where it is, with the reason under it.
     func sendDraft(steer: Bool) {
         let text = ui.draft
         let clips = ui.clips
@@ -742,22 +845,34 @@ final class PanelController {
             store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
             return
         }
+        lastSteer = steer
+        guard let to = store.targetThreadId, store.canReach(to) else {
+            Task { _ = await store.send(text, steer: steer, clips: clips, to: store.targetThreadId) } // says why
+            return
+        }
         draftSent()
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.clipDepth = 0 }
         ui.sending += 1
-        let to = store.targetThreadId
         Task {
             let sent = await store.send(text, steer: steer, clips: clips, to: to)
             ui.sending -= 1
-            // Not sent: the message and its selections come back.
+            // Not sent: the message and its selections come back to their chat. The island
+            // shows it without taking the keyboard from where you are now.
             if !sent {
-                ui.draft = ui.draft.isEmpty ? text : text + "\n" + ui.draft
-                ui.clips = clips + ui.clips
-                expand()
+                bringBack(ChatDraft(text: text, clips: clips), to: to)
+                if ui.mode != .expanded {
+                    ui.sendFailed = true
+                    peek(autoHide: false)
+                }
             }
             store.focusLastOpened()
         }
         hide() // sent: tuck the island away and hand focus back
+    }
+
+    private func retrySend() {
+        expand()
+        sendDraft(steer: lastSteer)
     }
 
     // MARK: - Clipping
@@ -855,6 +970,13 @@ final class PanelController {
             clip.comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
             withAnimation(Motion.snappy) { ui.landing = false; ui.clips.append(clip) }
             if ui.mode != .expanded { expand() } else { panel.makeKey(); focusTextField() }
+            onSelectEnded?()
+            return
+        case let .kept(clip, comment):
+            var clip = clip
+            clip.comment = comment
+            ui.landing = false
+            ui.clips.append(clip) // the mark beside the notch shows that it waits
             onSelectEnded?()
             return
         case let .unsent(comment):

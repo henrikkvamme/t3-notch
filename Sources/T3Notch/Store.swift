@@ -64,6 +64,7 @@ final class Store {
             syncThreadSubscription()
             // A chat picked here is opened for T3 too. A chat that follows T3 is not sent back.
             if !followingT3, focusedThreadId != oldValue { reportOpenToT3() }
+            if focusedThreadId != oldValue { onFocusChange?(focusedThreadId) }
         }
     }
     /// When the focused chat was chosen, to compare with chats opened in T3 itself: now for a
@@ -192,6 +193,11 @@ final class Store {
     /// Set by the island: true while it holds a draft, selections, a running select mode, or
     /// a message that is on its way to T3.
     var holdsTarget: (() -> Bool)?
+    /// Another chat is the focused one: the island changes to that chat's draft.
+    var onFocusChange: ((String?) -> Void)?
+
+    /// A message can go to this chat now.
+    func canReach(_ key: String) -> Bool { Store.demo || target(of: key) != nil }
 
     /// True while `focusLastOpened` sets the focused chat.
     private var followingT3 = false

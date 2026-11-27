@@ -33,6 +33,13 @@ final class OverlayUIState {
     /// The peek is for a request and stays until the request is handled.
     var peekSticky = false
     var onSubmitAnswers: (() -> Void)?
+    /// A message did not go out after the island closed: its peek stays until you look.
+    var sendFailed = false
+    /// ⏎ in the message field.
+    var onSend: (() -> Void)?
+    var onRetrySend: (() -> Void)?
+    /// Chats, other than the focused one, that have unsent work waiting.
+    var draftChats: Set<String> = []
     var draft = ""
     /// Messages on their way to T3. They left the draft, but the focused chat must stay until
     /// each one has its chat (see `Store.holdsTarget`).
@@ -69,8 +76,6 @@ final class OverlayUIState {
     var updater: Updater?
     var onOpenInT3: (() -> Void)?
     var onRequestFocus: (() -> Void)?
-    /// The draft is about to leave for the chat.
-    var onDraftSent: (() -> Void)?
     /// Typing started or stopped; the controller shows or hides the text cursor.
     var onTypingChange: ((Bool) -> Void)?
     var onIslandFrameChange: (() -> Void)?
@@ -200,8 +205,14 @@ struct OverlayView: View {
                         .transition(.blurReplace)
                 }
                 if let err = store.lastSendError {
-                    Text(err).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
-                        .transition(.blurReplace)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(err).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
+                        if ui.sendFailed {
+                            Spacer(minLength: 8)
+                            Button("Retry") { ui.onRetrySend?() }.buttonStyle(.glass).controlSize(.small)
+                        }
+                    }
+                    .transition(.blurReplace)
                 }
             }
             .padding(.horizontal, 16)
@@ -402,7 +413,7 @@ struct OverlayView: View {
         // Selections sit in the text as chips, where the caret was (see `DraftField`).
         return DraftField(ui: ui, draft: ui.draft, clips: ui.clips,
                           labels: ui.clips.map { $0.comment.isEmpty ? $0.label : $0.comment },
-                          editing: ui.editingClip, landing: ui.landing, onSubmit: sendDraft)
+                          editing: ui.editingClip, landing: ui.landing, onSubmit: { ui.onSend?() })
             .overlay(alignment: .topLeading) {
                 if ui.draft.isEmpty && ui.clips.isEmpty {
                     Text("Message").font(.system(size: 14)).foregroundStyle(.tertiary).allowsHitTesting(false)
@@ -458,32 +469,6 @@ struct OverlayView: View {
             ui.pickerIndex = 0
         }
         ui.onRequestFocus?()
-    }
-
-    private func sendDraft() {
-        let text = ui.draft
-        let clips = ui.clips
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
-        // Keep the draft when the selections cannot go in one message.
-        guard Store.clipPlan(clips) != nil else {
-            store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
-            return
-        }
-        ui.onDraftSent?()
-        withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.clipDepth = 0 }
-        ui.sending += 1
-        let to = store.targetThreadId
-        Task {
-            let sent = await store.send(text, steer: Settings.enterSteers, clips: clips, to: to)
-            ui.sending -= 1
-            // Not sent: the message and its selections come back.
-            if !sent {
-                ui.draft = ui.draft.isEmpty ? text : text + "\n" + ui.draft
-                ui.clips = clips + ui.clips
-            }
-            store.focusLastOpened()
-        }
-        ui.onClose?() // sent: tuck the island away and hand focus back
     }
 
     private func approvalTitle(_ req: Store.PendingRequest) -> String {

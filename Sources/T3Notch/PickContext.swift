@@ -11,7 +11,7 @@ import ApplicationServices
 // as a T3 `element` context record (see `elementRecord`), which T3 shows as a chip.
 
 /// One element in the accessibility tree, with its frame in global points (top-left origin).
-struct PickElement: Sendable {
+struct PickElement: Sendable, Codable {
     var role: String
     var subrole: String?
     var name: String?
@@ -30,7 +30,7 @@ struct PickElement: Sendable {
     }
 }
 
-struct PickContext: Sendable {
+struct PickContext: Sendable, Codable {
     var appName: String
     var bundleID: String?
     var appIconPNG: Data?
@@ -60,7 +60,7 @@ struct PickContext: Sendable {
 
     /// A page element as the browser extension describes it. Text is clipped and the HTML
     /// has no scripts, styles, inline handlers or typed values.
-    struct PageElement: Sendable {
+    struct PageElement: Sendable, Codable {
         var selector: String
         var tag: String
         var role: String?

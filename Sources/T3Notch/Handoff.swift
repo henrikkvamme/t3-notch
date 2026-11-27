@@ -10,17 +10,14 @@ enum Handoff {
     /// process only, so it can never land in another app. The previous clipboard comes back
     /// afterwards. Without Accessibility (needed to send keys), the first clip is left on the
     /// clipboard to paste by hand. Steps are logged to ~/Library/Logs/T3Notch/handoff.log.
-    static func pasteClips(_ clips: [Clip], text: String = "", into pid: pid_t) {
-        guard !clips.isEmpty else { return }
+    ///
+    /// `done` says if the clips went to T3. They did not when T3 never came to the front:
+    /// then nothing was pasted and the clipboard was not touched.
+    static func pasteClips(_ clips: [Clip], text: String = "", into pid: pid_t, done: @escaping @MainActor (Bool) -> Void) {
+        guard !clips.isEmpty else { done(true); return }
         let pasteboard = NSPasteboard.general
-        let saved = snapshot(pasteboard)
-        let trusted = Permission.accessibility.isGranted
-        log("handoff: \(clips.count) clip(s) to pid \(pid), accessibility=\(trusted)")
-        guard trusted else {
-            // Can't paste for you: leave the first clip on the clipboard to paste by hand.
-            put(clips[0].png, on: pasteboard)
-            return
-        }
+        log("handoff: \(clips.count) clip(s) to pid \(pid)")
+        guard Permission.accessibility.isGranted else { done(false); return }
         Task {
             // Wait for T3 to come forward with the chat open (up to ~3s).
             var front = false
@@ -29,10 +26,16 @@ enum Handoff {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             log("handoff: T3 frontmost=\(front), frontmost now \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")")
+            guard front else { done(false); return }
             try? await Task.sleep(for: .milliseconds(600))
+            // What you copy while this runs is yours: it is then not replaced by the old clipboard.
+            var saved: [[NSPasteboard.PasteboardType: Data]]? = snapshot(pasteboard)
+            var ours = pasteboard.changeCount
             // One clip per paste, as image data: the same as pasting a copied screenshot.
             for (i, clip) in clips.enumerated() {
+                if pasteboard.changeCount != ours { saved = nil }
                 put(clip.png, on: pasteboard)
+                ours = pasteboard.changeCount
                 let viaMenu = pressPasteMenuItem(of: pid)
                 if !viaMenu { sendPaste(to: pid) }
                 log("handoff: pasted clip \(i + 1) via \(viaMenu ? "Edit › Paste" : "⌘V")")
@@ -41,14 +44,17 @@ enum Handoff {
             // The text goes last, as its own paste: a prompt link would race the image paste,
             // and T3 will not drop a link's prompt into a chat box that already has a draft.
             if !text.isEmpty {
+                if pasteboard.changeCount != ours { saved = nil }
                 pasteboard.clearContents()
                 pasteboard.setString(text, forType: .string)
+                ours = pasteboard.changeCount
                 if !pressPasteMenuItem(of: pid) { sendPaste(to: pid) }
                 log("handoff: pasted text (\(text.count) chars)")
                 try? await Task.sleep(for: .milliseconds(350))
             }
             try? await Task.sleep(for: .milliseconds(800))
-            restore(saved, to: pasteboard)
+            if let saved, pasteboard.changeCount == ours { restore(saved, to: pasteboard) }
+            done(true)
         }
     }
 
