@@ -84,8 +84,6 @@ final class OverlayUIState {
     @ObservationIgnored var replyMaxOffset: CGFloat = 0
     /// The reply text's laid-out height; the scroll area is sized to it (up to a cap).
     var replyTextHeight: CGFloat = 0
-    /// The height of the reply area in the open island, so a short reply still fills it.
-    var replyViewport: CGFloat = 0
 
     // MARK: The history above the reply
 
@@ -97,35 +95,36 @@ final class OverlayUIState {
     var reveal: CGFloat = 0
     @ObservationIgnored var historyHeight: CGFloat = 0
     @ObservationIgnored var historyTotal = 0
-    /// The reply's top is at the top of the view (or you moved from there yourself).
-    @ObservationIgnored private var replyInPlace = true
+    /// You are at the end of the chat, where the open island rests.
+    @ObservationIgnored private var atEnd = true
+    /// Your hand moves the scroll now (not an order of ours).
+    @ObservationIgnored var replyUserScroll = false
     @ObservationIgnored private var lastHistoryHeight: CGFloat = 0
     /// More history was asked for: the height it had, to keep your place when it comes.
     @ObservationIgnored private var growingFrom: CGFloat?
 
-    /// Puts the reply's top at the top of the view, with the history out of sight above it.
+    /// Puts the view where it rests: open, at the end of the chat, as a chat does. A peek
+    /// has no history and shows its reply from the top.
     func anchorReply() {
+        atEnd = true
         if reveal != 0 { reveal = 0 }
-        guard abs(replyOffset - historyHeight) > 1 else { replyInPlace = true; showHistory(); return }
-        replyInPlace = false
-        if historyVisible { historyVisible = false }
-        scrollReply(to: .y(historyHeight))
+        scrollReply(to: mode == .expanded ? .bottom : .y(0))
     }
 
-    /// Back from the history to the reply, in view of the eye.
+    /// Back from the history to the end, in view of the eye.
     func returnToReply() {
-        scrollReply(to: .y(historyHeight), animation: Motion.content)
+        atEnd = true
+        scrollReply(to: .bottom, animation: Motion.content)
     }
 
-    private func showHistory() {
-        if !historyVisible, historyShown > 0 { withAnimation(Motion.content) { historyVisible = true } }
-    }
+    /// A scroll from the keyboard leaves the end, as a scroll by hand does.
+    func leaveEnd() { atEnd = false }
 
     /// The scroll offset or the history's height changed.
     func replyGeometryChanged() {
+        guard mode == .expanded else { return }
         let top = historyHeight
         if top != lastHistoryHeight {
-            let grew = top - lastHistoryHeight
             lastHistoryHeight = top
             if let from = growingFrom {
                 // Older entries came in above: stay on what you were reading.
@@ -133,17 +132,21 @@ final class OverlayUIState {
                 scrollReply(to: .y(replyOffset + (top - from)))
                 return
             }
-            // The chat changed above the reply while you were on the reply.
-            if reveal == 0 || grew < 0 { anchorReply(); return }
         }
-        if !replyInPlace {
-            if abs(replyOffset - top) <= 1 { replyInPlace = true; showHistory() } else { scrollReply(to: .y(top)) }
+        let up = max(0, (replyMaxOffset - replyOffset).rounded())
+        if up < 2 {
+            atEnd = true
+        } else if replyUserScroll {
+            atEnd = false
+        } else if atEnd {
+            // The chat grew or the view changed size while you were at the end: stay there.
+            scrollReply(to: .bottom)
             return
         }
-        let up = max(0, (top - replyOffset).rounded())
-        if reveal != up { reveal = up }
+        let shown = atEnd ? 0 : up
+        if reveal != shown { reveal = shown }
         // At the top of what is here: bring more.
-        if up > 0, replyOffset <= 1, historyShown < historyTotal, growingFrom == nil {
+        if !atEnd, replyOffset <= 1, replyMaxOffset > 1, historyShown < historyTotal, growingFrom == nil {
             growingFrom = top
             historyShown += 12
         }
@@ -153,11 +156,9 @@ final class OverlayUIState {
     func historyFollows(_ mode: PanelController.Mode) {
         let wanted = mode == .expanded ? max(historyShown, 8) : 0
         if historyShown != wanted { historyShown = wanted }
-        if wanted == 0 {
-            growingFrom = nil
-            if reveal != 0 { reveal = 0 }
-            if historyVisible { historyVisible = false }
-        }
+        if historyVisible != (wanted > 0) { historyVisible = wanted > 0 }
+        growingFrom = nil
+        anchorReply()
     }
 
     var onClose: (() -> Void)?
@@ -452,32 +453,37 @@ struct OverlayView: View {
 
     @ViewBuilder private var reply: some View {
         if let r = store.latestReply {
+            // A run that has said nothing yet: the open island shows the whole chat, with your
+            // message last, and no old reply under it.
+            let stale = ui.mode == .expanded && store.replyIsStale
             ScrollView {
               VStack(alignment: .leading, spacing: 0) {
                 // Your messages and the older replies, above this one: scroll up for them.
-                HistoryList(store: store, ui: ui, liveID: r.id,
+                HistoryList(store: store, ui: ui, liveID: stale ? "" : r.id,
                             baseDir: store.targetThread?["worktreePath"].string
                                 ?? store.project(for: store.targetThread)?["workspaceRoot"].string)
                 // One view per message: a new message slides the old one up and out while
                 // the new one rises in, both crossfading through a blur.
                 ZStack(alignment: .topLeading) {
-                    replyText(r)
+                    Group { if stale { Color.clear.frame(height: 0) } else { replyText(r) } }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentTransition(.identity) // streamed text grows; it should not crossfade
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
                             // Only the current message sizes the reply, not one animating out.
                             if r.id == store.latestReply?.id { ui.replyTextHeight = h }
                         }
-                        .id(r.id)
+                        .id(stale ? "stale" : r.id)
                         .transition(MessageChange())
                 }
-                // Open, the reply's place is as tall as the view, so its top can sit at the
-                // top with the history out of sight above it.
-                .frame(minHeight: ui.mode == .expanded ? ui.replyViewport : nil, alignment: .topLeading)
                 .animation(Motion.message, value: r.id)
               }
             }
             .scrollIndicators(.never)
+            // Open, the chat rests at its end and grows upward, as in T3.
+            .defaultScrollAnchor(ui.mode == .expanded ? .bottom : .top)
+            .onScrollPhaseChange { _, phase in
+                ui.replyUserScroll = phase == .tracking || phase == .interacting || phase == .decelerating
+            }
             .modifier(ReplyScroller(ui: ui))
             .onScrollGeometryChange(for: [CGFloat].self, of: { g in
                 [g.contentOffset.y, max(0, g.contentSize.height - g.containerSize.height)]

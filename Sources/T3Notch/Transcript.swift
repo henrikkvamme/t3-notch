@@ -214,9 +214,6 @@ struct ReplyHeight: ViewModifier {
         if ui.mode == .expanded {
             // The open island has a fixed size: the reply takes the room that is left.
             content.frame(maxHeight: .infinity)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                    if ui.replyViewport != height { ui.replyViewport = height }
-                }
         } else {
             content.frame(height: min(ui.replyTextHeight + ui.reveal, min(220, ui.maxReplyHeight)))
         }

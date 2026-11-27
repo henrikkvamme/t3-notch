@@ -1095,6 +1095,13 @@ final class Store {
         return NowLine(text: text, since: since)
     }
 
+    /// A run works and has said nothing yet, so `latestReply` is still the reply before it.
+    var replyIsStale: Bool {
+        guard !Settings.showThinking, isTargetActive, subscribedThreadId == targetThreadId,
+              let run = targetThread?["activeRunId"].string ?? targetThread?["latestRunId"].string else { return false }
+        return !assistantMessages.contains { $0["runId"].string == run }
+    }
+
     private var assistantMessages: [JSON] {
         messages.values.filter {
             $0["role"].string == "assistant" && $0["notification"].isNull && !($0["text"].string ?? "").isEmpty

@@ -891,6 +891,7 @@ final class PanelController {
     /// Scrolls the reply by about four lines per press.
     private func scrollReply(by step: Int) {
         let y = min(max(ui.replyOffset + CGFloat(step) * 64, 0), ui.replyMaxOffset)
+        ui.leaveEnd()
         ui.scrollReply(to: .y(y), animation: Motion.snappy)
     }
 
@@ -1033,6 +1034,13 @@ final class PanelController {
             clip.comment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
             withAnimation(Motion.snappy) { ui.landing = false; ui.clips.append(clip) }
             if ui.mode != .expanded { expand() } else { panel.makeKey(); focusTextField() }
+            // Select mode hands the keyboard back to the app you were in, and that can land
+            // after the island took it. The selection is in the island's field: ⏎ must send it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, self.clipper == nil, self.ui.mode == .expanded, !self.panel.isKeyWindow else { return }
+                self.panel.makeKey()
+                self.focusTextField()
+            }
             onSelectEnded?()
             return
         case let .kept(clip, comment):
