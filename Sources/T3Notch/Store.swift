@@ -1135,6 +1135,12 @@ final class Store {
                     guard let id = e["contextId"].string, let label = e["label"].string else { continue }
                     chips[i, default: []].append("[\(label)](t3-context://v1/element/\(id))")
                 }
+                // What you wrote about a selection is your own words: it stands in the message,
+                // whole, after the selection's chips. No field of the record is for it.
+                for (i, clip) in clips.enumerated() {
+                    let words = clip.comment.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                    if !words.isEmpty, chips[i] != nil { chips[i]?.append("\u{201C}\(words)\u{201D}") }
+                }
                 command["text"] = .string(Self.textWithChips(text, clips: clips, chips: chips))
                 if !records.isEmpty { command["context"] = ["version": .number(1), "records": .array(records)] }
             }
@@ -1174,8 +1180,7 @@ final class Store {
             let n = i + 1
             guard let ctx = clip.context else {
                 images.append(image("selection-\(n).png", clip.png))
-                // No element record to carry the comment: it names the picture's chip.
-                labels.append(clip.comment.isEmpty ? "Selection \(n)" : clip.comment)
+                labels.append("Selection \(n)")
                 continue
             }
             // One picture: the selection with what is around it. The whole window costs the
@@ -1184,7 +1189,7 @@ final class Store {
             images.append(image(name, p.window ? ctx.surroundPNG() ?? clip.png : clip.png))
             labels.append(ctx.page.flatMap { $0.name ?? $0.hint ?? $0.text } ?? ctx.element.flatMap { $0.name ?? $0.description }
                           ?? ctx.elementText ?? "Selection \(n)")
-            elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name, comment: clip.comment))
+            elements.append(ctx.elementRecord(id: "element_\(batch)_\(n)", index: n, image: name))
             elementClips.append(i)
         }
         return (images, labels, elements, elementClips)
