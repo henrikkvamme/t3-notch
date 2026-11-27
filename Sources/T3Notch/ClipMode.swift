@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import ScreenCaptureKit
 import SwiftUI
 import os
@@ -17,13 +18,19 @@ struct Clip: Identifiable, Equatable {
 
 // MARK: - Clipping mode
 
-/// ⌘P from the open island, or a tap of ⌃⌥ from any app (select mode). Freezes every screen,
-/// then lets you hover to pick a UI element (Accessibility) or drag a rectangle. Releasing
-/// adds the clip and returns to the island; with ⇧ held it stays for more.
+/// Picks a part of the screen, in one of two modes.
 ///
-/// Keys: k or ↑ picks the parent, j or ↓ the child, h and l the previous and next sibling.
-/// ⏎ adds the highlight and ends, ⌫ removes the last pick, Esc or ⌘P leave. In select mode,
-/// ⇥ and ⇧⇥ change the chat the picks go to.
+/// Clip mode, ⌘P from the open island: freezes every screen, then lets you hover to pick a UI
+/// element (Accessibility) or drag a rectangle. Releasing adds the clip and returns to the
+/// island; with ⇧ held it stays for more. Keys: k or ↑ picks the parent, j or ↓ the child,
+/// h and l the previous and next sibling. ⏎ adds the highlight and ends, ⌫ removes the last
+/// pick, Esc or ⌘P leave.
+///
+/// Select mode, ⌃⌥ held in any app (see `SelectTrigger`): shows the element under the pointer
+/// on the live screen and takes no focus. A scroll changes the level. Letting go hides it. A
+/// click freezes the screens and opens a comment field beside the selection: ⏎ sends both to
+/// the chat, Esc leaves. There, ⌃K picks the parent, ⌃J the child, ⌃H and ⌃L the previous
+/// and next sibling, as k, j, h and l do in clip mode.
 ///
 /// Rects are global and top-left-origin (CoreGraphics/Accessibility space) throughout.
 @MainActor
@@ -35,9 +42,36 @@ final class ClipController {
     private let probe = ElementProbe()
     private let onFinish: ([Clip], Int) -> Void
     private var finished = false
-    /// Select mode: where the picks go, which ⇥ changes. Nil for ⌘P from the island.
-    private let destination: Destination?
-    /// The app in front when select mode started, which gets focus back if nothing is picked.
+    /// Select mode: the chat the comment goes to, and where the result goes. Nil in clip mode.
+    private let select: Select?
+    /// Select mode, while ⌃⌥ is held: takes the scroll and the click from the app under the
+    /// pointer, which keeps the focus.
+    private var tap: EventTap?
+    /// Where the left button went down, while the tap holds it.
+    private var pressAt: CGPoint?
+    /// Text selected in the app in front when select mode started: the highlight while the
+    /// pointer is on it.
+    private var textSelection: ProbeResult?
+    /// Screen content, asked for when select mode starts so the click can capture at once.
+    private var shareable: Task<ScreenCapture.Content?, Never>?
+    /// ⏎ came before the screens were captured: send when they are (true steers).
+    private var sendWhenFrozen: Bool?
+    /// The screens are captured (or could not be), after the click.
+    private var captured = false
+    /// ⏎ was pressed: the selection goes to the chat (true steers).
+    private var sending: Bool?
+    /// The chat that showed when ⏎ was pressed. The end can come a second later, and the
+    /// island's chat can change in that time.
+    private var sendTo: String?
+    /// The comment did not go out with a selection; it goes to the island.
+    private var unsent = false
+    /// Select mode ended because the hold ended, not by Esc.
+    private var released = false
+    /// The button went up before the first probe answered: the comment opens when it does.
+    private var clicking = false
+    /// The overlay that holds the keyboard while the comment field is open, and the app that
+    /// gets it back.
+    private weak var keyPanel: NotchPanel?
     private var previousApp: NSRunningApplication?
     /// After a navigation key the highlight is not where the pointer points: keep it until the
     /// pointer moves 8pt away.
@@ -46,13 +80,31 @@ final class ClipController {
     /// newer action replaced is dropped.
     private(set) var navigation = 0
 
-    struct Destination {
+    struct Select {
+        /// The title of the chat the comment goes to, nil with none.
         let title: () -> String?
+        /// The id of that chat, nil with none.
+        let target: () -> String?
+        /// ⇥ and ⇧⇥: the next or previous chat.
         let cycle: (Int) -> Void
+        let onEnd: (SelectEnd) -> Void
     }
 
-    private init(destination: Destination?, onFinish: @escaping ([Clip], Int) -> Void) {
-        self.destination = destination
+    enum SelectEnd {
+        /// The hold ended before a click: ⌃⌥ let go, or something else was pressed.
+        case released
+        /// Esc, or another app took the keyboard.
+        case cancelled
+        /// ⏎: the selection and its comment, for the chat that showed when ⏎ was pressed
+        /// (`to`, nil with none). `steer` for ⌘⏎.
+        case send(Clip, comment: String, steer: Bool, to: String?)
+        /// The screen could not be captured (Screen Recording is off), so there is no
+        /// selection to send. The comment goes to the island.
+        case unsent(comment: String)
+    }
+
+    private init(select: Select? = nil, onFinish: @escaping ([Clip], Int) -> Void) {
+        self.select = select
         self.onFinish = onFinish
     }
 
@@ -71,54 +123,50 @@ final class ClipController {
     func demoScroll(_ step: Int) { state.step(step) }
     func demoClick() { if let h = state.highlight { add(h) } }
 
-    static func start(depth: Int, destination: Destination? = nil,
-                      onFinish: @escaping ([Clip], Int) -> Void) -> ClipController {
-        let controller = ClipController(destination: destination, onFinish: onFinish)
+    static func start(depth: Int, onFinish: @escaping ([Clip], Int) -> Void) -> ClipController {
+        let controller = ClipController(onFinish: onFinish)
         current = controller
         controller.state.depth = depth
-        controller.state.destination = destination?.title() ?? (destination == nil ? nil : "")
-        if destination != nil {
-            controller.previousApp = NSWorkspace.shared.frontmostApplication
-            // Text selected in the app in front is the first highlight, until the pointer moves
-            // or you navigate. Read off the main thread: the app may not answer.
-            let pointer = globalMouse()
-            let generation = controller.navigation
-            controller.probe.selection { [weak controller] preset in
-                guard let controller, let preset, controller.navigation == generation,
-                      let now = controller.state.pointer ?? Optional(pointer),
-                      hypot(now.x - pointer.x, now.y - pointer.y) <= 8 else { return }
-                controller.state.preset = preset
-                controller.state.presetPointer = pointer
-            }
-        }
         Task { await controller.begin() }
         return controller
     }
 
-    private func begin() async {
-        state.frozenWindows = Self.windowFrames()
-        let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
-        var shots: [(NSScreen, CGRect, CGImage?)] = []
+    /// One overlay per screen, over everything. `takesMouse` false lets clicks through.
+    private func showOverlays(takesMouse: Bool) {
         for screen in NSScreen.screens {
-            let rect = CGRect(x: screen.frame.minX, y: primaryMaxY - screen.frame.maxY,
-                              width: screen.frame.width, height: screen.frame.height)
-            let image = try? await SCScreenshotManager.captureImage(in: rect)
-            shots.append((screen, rect, image))
-        }
-        state.frozen = shots.map { ClipState.Frozen(rect: $0.1, image: $0.2) }
-        for (screen, rect, image) in shots {
             let panel = NotchPanel()
             panel.level = .screenSaver
-            panel.ignoresMouseEvents = false
+            panel.ignoresMouseEvents = !takesMouse
             panel.setFrame(screen.frame, display: false)
             panel.contentView = FirstClickHostingView(rootView: ClipOverlayView(
-                state: state, screenRect: rect, image: image,
+                state: state, screenRect: Self.globalRect(of: screen),
                 onHover: { [weak self] p in self?.hover(p) },
                 onAdd: { [weak self] r in self?.add(r) },
-                onRemove: { [weak self] i in self?.remove(i) }))
+                onRemove: { [weak self] i in self?.remove(i) },
+                onClick: { [weak self] p in self?.repick(at: p) },
+                onCommentShown: { [weak self] in self?.focusComment() }))
             panel.orderFrontRegardless()
             windows.append(panel)
         }
+        state.screens = NSScreen.screens.map(Self.globalRect)
+    }
+
+    /// A screen's frame in global top-left-origin points.
+    static func globalRect(of screen: NSScreen) -> CGRect {
+        let primaryMaxY = NSScreen.screens.first?.frame.maxY ?? 0
+        return CGRect(x: screen.frame.minX, y: primaryMaxY - screen.frame.maxY,
+                      width: screen.frame.width, height: screen.frame.height)
+    }
+
+    private func begin() async {
+        state.frozenWindows = Self.windowFrames()
+        var shots: [ClipState.Frozen] = []
+        for screen in NSScreen.screens {
+            let rect = Self.globalRect(of: screen)
+            shots.append(.init(rect: rect, image: try? await SCScreenshotManager.captureImage(in: rect)))
+        }
+        state.frozen = shots
+        showOverlays(takesMouse: true)
         windows.first(where: { $0.frame.contains(NSEvent.mouseLocation) })?.makeKey()
         // Only the frontmost app may hide the pointer; T3 Notch is frontmost while clipping,
         // and the island hands focus back when it hides.
@@ -160,6 +208,7 @@ final class ClipController {
 
     /// Handles a key while the mode runs. Returns true when the key was used.
     private func key(_ e: NSEvent) -> Bool {
+        if select != nil { return commentKey(e) }
         let mods = e.modifierFlags.intersection([.command, .shift, .control, .option])
         switch (e.keyCode, e.charactersIgnoringModifiers?.lowercased()) {
         case (53, _): finish() // Esc
@@ -169,9 +218,6 @@ final class ClipController {
                 add(h, keepOpen: true)
             }
             finish()
-        case (48, _) where destination != nil: // ⇥ / ⇧⇥: the chat the picks go to
-            destination?.cycle(mods.contains(.shift) ? -1 : 1)
-            state.destination = destination?.title() ?? ""
         case (51, _), (117, _): // ⌫: remove the last pick
             if !state.added.isEmpty { remove(state.added.count - 1) }
         case (126, _), (_, "k"): keyboardStep(1)
@@ -197,11 +243,12 @@ final class ClipController {
     private func leavePreset() -> Bool {
         guard let preset = state.preset, let element = preset.elements.first ?? nil else {
             state.preset = nil
+            textSelection = nil
             return false
         }
         let generation = beginNavigation()
         state.preset = nil
-        state.presetPointer = nil
+        textSelection = nil
         probe.chain(for: element, pid: preset.pid, windowID: preset.windowID, window: preset.window) { [weak self] result in
             guard let self, self.navigation == generation, let first = result.frames.first else { return }
             self.state.setProbe(result)
@@ -211,6 +258,7 @@ final class ClipController {
     }
 
     private func keyboardStep(_ step: Int) {
+        guard state.region == nil else { return } // a dragged rectangle has no levels
         if leavePreset() { return }
         _ = beginNavigation()
         state.step(step)
@@ -219,6 +267,7 @@ final class ClipController {
     /// Moves the highlight to the previous (−1) or next (+1) sibling of the highlighted
     /// element, and keeps it there until the pointer moves 8pt.
     private func sibling(_ direction: Int) {
+        guard state.region == nil else { return }
         if leavePreset() { return }
         guard let h = state.highlight else { return }
         let p = state.probe
@@ -242,11 +291,10 @@ final class ClipController {
 
     private func hover(_ p: CGPoint) {
         guard !Store.demo else { return } // the demo script drives the pointer
+        guard state.phase != .annotate else { return } // the selection stays where you clicked
+        guard !clicking else { return } // the click's own probe must not be replaced
         state.pointer = p
-        if let start = state.presetPointer, hypot(p.x - start.x, p.y - start.y) > 8 {
-            state.preset = nil
-            state.presetPointer = nil
-        }
+        if select != nil { state.preset = textSelection.flatMap { $0.frames.first?.insetBy(dx: -6, dy: -6).contains(p) == true ? $0 : nil } }
         if let locked = lockedAt {
             guard hypot(p.x - locked.x, p.y - locked.y) > 8 else { return }
             lockedAt = nil
@@ -254,7 +302,7 @@ final class ClipController {
             navigation += 1 // the pointer leads again: drop pending navigation results
         }
         probe.probe(at: p) { [weak self] result in
-            guard let self, self.lockedAt == nil else { return }
+            guard let self, self.lockedAt == nil, self.state.phase != .annotate else { return }
             self.state.setProbe(result)
         }
     }
@@ -262,6 +310,10 @@ final class ClipController {
     /// Adds a clip. Releasing returns to the island with it straight away; holding ⇧ while
     /// releasing keeps clipping, so the next release without ⇧ brings them all back.
     private func add(_ rect: CGRect, keepOpen: Bool = false) {
+        if select != nil {
+            if state.phase == .annotate { selectRegion(rect) }
+            return
+        }
         guard rect.width >= 4, rect.height >= 4, let clip = state.crop(rect) else { return }
         state.clips.append(clip)
         readContext(of: clip.id, rect: rect)
@@ -320,18 +372,24 @@ final class ClipController {
         guard !finished else { return }
         finished = true
         for m in monitors { NSEvent.removeMonitor(m) }
-        NSCursor.unhide()
         monitors = []
         if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
         resignObserver = nil
-        withAnimation(Motion.close) { state.active = false }
+        if select == nil { NSCursor.unhide() } else { leaveSelect() }
+        withAnimation(select == nil ? Motion.close : Motion.hold) { state.active = false }
         Task { [windows] in
             try? await Task.sleep(for: .milliseconds(220))
             for w in windows { w.orderOut(nil) }
         }
-        // Select mode with nothing picked: give focus back to the app it started in.
-        if destination != nil, state.clips.isEmpty, NSApp.isActive { previousApp?.activate() }
-        let deliver = { [self] in onFinish(state.clips, state.depth) }
+        let deliver = { [self] in
+            guard let select else { onFinish(state.clips, state.depth); return }
+            let comment = state.comment.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let steer = sending, let clip = state.clips.first {
+                select.onEnd(.send(clip, comment: comment, steer: steer, to: sendTo))
+            } else {
+                select.onEnd(unsent ? .unsent(comment: comment) : released ? .released : .cancelled)
+            }
+        }
         if pendingContexts == 0 { deliver() } else {
             whenContextsRead = deliver
             // An app that stops answering must not hold the clips back: send them without
@@ -343,6 +401,318 @@ final class ClipController {
                 done()
             }
         }
+    }
+
+    // MARK: Select mode
+
+    /// ⌃⌥ is held in some app. Shows the element under the pointer on the live screen. The app
+    /// keeps the focus and the pointer: the overlays let clicks through, and an event tap takes
+    /// the scroll (levels) and the left button (the comment). Nil when the tap is not allowed
+    /// (no Accessibility).
+    static func startSelecting(_ select: Select) -> ClipController? {
+        let controller = ClipController(select: select, onFinish: { _, _ in })
+        return controller.beginHover() ? controller : nil
+    }
+
+    private func beginHover() -> Bool {
+        // The tap sees the keys go up in order with the clicks. The hold trigger's events come
+        // another way and can pass a click on a busy main thread.
+        let events: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel,
+                                     .flagsChanged]
+        guard let tap = EventTap(events, handler: { [weak self] type, event in self?.tapped(type, event) ?? false })
+        else { return false }
+        self.tap = tap
+        tap.onMissedEvents = { [weak self] in self?.missedEvents() }
+        state.phase = .hover
+        state.destination = select?.title() ?? ""
+        showOverlays(takesMouse: false)
+        if Permission.screenRecording.isGranted { shareable = Task { await ScreenCapture.content() } }
+        // Text selected in the app in front is the highlight while the pointer is on it. Read
+        // off the main thread: the app may not answer.
+        probe.selection { [weak self] found in
+            guard let self, let found, !self.finished, self.state.phase == .hover else { return }
+            self.textSelection = found
+            if let p = self.state.pointer { self.hover(p) }
+        }
+        // One turn later, so the overlays are on screen and the fade has somewhere to start.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.finished else { return }
+            withAnimation(Motion.hold) { self.state.active = true }
+        }
+        hover(Self.globalMouse())
+        return true
+    }
+
+    /// The hold trigger says the hold ended: ⌃⌥ went up, or another key or button went down.
+    /// Hides select mode, unless the comment field is open: that stays until ⏎ or Esc.
+    func holdEnded() {
+        guard select != nil, state.phase == .hover, !finished else { return }
+        let flags = NSEvent.modifierFlags
+        if flags.contains(.control), flags.contains(.option) {
+            // The keys are still down, so something else was pressed.
+            release()
+            return
+        }
+        // The keys went up. The tap gets that in order with a click made just before, so it
+        // decides. This is for a tap that macOS turned off.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.release() }
+    }
+
+    /// Ends the hold, unless a click is under way: then the button going up opens the comment.
+    private func release() {
+        guard state.phase == .hover, !finished, pressAt == nil, !clicking else { return }
+        released = true
+        finish()
+    }
+
+    /// The tap was off for a moment. A press it holds may have ended unseen, and would keep
+    /// `release` from ending the hold: drop it, unless the button is still down (a drag goes
+    /// on). The hold ends here if the keys went up too.
+    private func missedEvents() {
+        guard state.phase == .hover, !finished else { return }
+        if pressAt != nil, CGEventSource.buttonState(.combinedSessionState, button: .left) { return }
+        pressAt = nil
+        state.drag = nil
+        let flags = NSEvent.modifierFlags
+        if !flags.contains(.control) || !flags.contains(.option) { release() }
+    }
+
+    /// An event the tap saw. Returns true to keep it from the app under the pointer.
+    private func tapped(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        guard !finished else { return false }
+        // Clicked, and the screens are being captured: keep the button and the scroll from
+        // the app until the overlays take them.
+        guard state.phase == .hover else { return type != .mouseMoved && type != .flagsChanged }
+        let p = event.location
+        switch type {
+        case .flagsChanged:
+            if !event.flags.contains(.maskControl) || !event.flags.contains(.maskAlternate) { release() }
+            return false
+        case .mouseMoved:
+            hover(p)
+            return false
+        case .leftMouseDown:
+            pressAt = p
+            return true
+        case .leftMouseDragged:
+            guard let start = pressAt else { return false }
+            state.pointer = p
+            if hypot(p.x - start.x, p.y - start.y) > 4 {
+                state.drag = CGRect(x: min(start.x, p.x), y: min(start.y, p.y),
+                                    width: abs(p.x - start.x), height: abs(p.y - start.y))
+            }
+            return true
+        case .leftMouseUp:
+            // A button that went down before select mode showed belongs to the app.
+            guard pressAt != nil else { return false }
+            pressAt = nil
+            if let d = state.drag {
+                state.drag = nil
+                annotate(d, region: true)
+            } else if let h = state.highlight {
+                annotate(h, region: false)
+            } else {
+                // Clicked before the first probe answered: comment on what it finds.
+                clicking = true
+                probe.probe(at: p) { [weak self] result in
+                    guard let self, self.clicking else { return }
+                    self.clicking = false
+                    guard !self.finished, self.state.phase == .hover else { return }
+                    self.state.pointer = p
+                    self.state.setProbe(result)
+                    if let h = self.state.highlight { self.annotate(h, region: false) }
+                    let flags = NSEvent.modifierFlags
+                    if !flags.contains(.control) || !flags.contains(.option) { self.release() }
+                }
+                return true
+            }
+            // Nothing to comment on, and the keys went up during the click: the hold is over.
+            if !event.flags.contains(.maskControl) || !event.flags.contains(.maskAlternate) { release() }
+            return true
+        case .scrollWheel:
+            if state.preset != nil { _ = leavePreset() } else if let e = NSEvent(cgEvent: event) { state.scroll(e) }
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// The click: the selection stays put and the comment field opens beside it.
+    private func annotate(_ rect: CGRect, region: Bool) {
+        guard state.phase == .hover, rect.width >= 4, rect.height >= 4 else { return }
+        guard Permission.screenRecording.isGranted else {
+            unsent = true
+            finish()
+            return
+        }
+        navigation += 1 // drops a hover probe that is still on its way
+        state.frozenWindows = Self.windowFrames()
+        if region { selectRegion(rect) }
+        withAnimation(Motion.content) { state.phase = .annotate }
+        // Capture before the overlays take the pointer and the keyboard. Until then the app
+        // keeps what its hover and focus show (a tooltip, an open menu), so the picture has it.
+        Task { [weak self, shareable] in
+            let frozen = await ScreenCapture.screens(await shareable?.value)
+            guard let self, !self.finished else { return }
+            self.state.frozen = frozen
+            self.captured = true
+            self.takeOver()
+            if let steer = self.sendWhenFrozen { self.send(steer: steer) }
+        }
+        // A slow capture must not keep the comment field waiting.
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            self?.takeOver()
+        }
+    }
+
+    /// The overlays take the pointer and the keyboard for the comment field. T3 Notch does not
+    /// become the active app, so the app you were in keeps its look.
+    private func takeOver() {
+        guard state.phase == .annotate, !finished, let tap else { return }
+        tap.stop()
+        self.tap = nil
+        for w in windows { w.ignoresMouseEvents = false }
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApp = front }
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self else { return e }
+            return MainActor.assumeIsolated { self.key(e) } ? nil : e
+        } as Any)
+        // A scroll still changes the level while ⌃⌥ is held, as before the click.
+        monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            MainActor.assumeIsolated {
+                guard let self, e.modifierFlags.isSuperset(of: [.control, .option]), self.state.region == nil else { return }
+                if self.state.preset != nil { _ = self.leavePreset() } else { self.state.scroll(e) }
+            }
+            return nil
+        } as Any)
+        // Another app took the keyboard (⌘⇥, a dialog): leave, or ⏎ and Esc would go to it.
+        // A click on another screen's overlay only moves the keyboard between our windows.
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, !self.windows.contains(where: \.isKeyWindow) else { return }
+                    self.finish()
+                }
+            }
+        }
+        focusComment()
+    }
+
+    /// Gives the keyboard to the comment field, on the screen that shows it now.
+    private func focusComment() {
+        guard state.phase == .annotate, !finished, tap == nil, let screen = state.cardScreen,
+              let i = state.screens.firstIndex(of: screen), windows.indices.contains(i) else { return }
+        let host = windows[i]
+        if !host.isKeyWindow { host.makeKey() }
+        keyPanel = host
+        // SwiftUI's FocusState is unreliable in a non-activating panel, so focus the field
+        // through AppKit once SwiftUI has mounted it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak host] in
+            guard let self, !self.finished, let host, host.isKeyWindow,
+                  (host.firstResponder as? NSTextView)?.isEditable != true,
+                  let field = host.contentView?.firstEditableText, host.makeFirstResponder(field),
+                  let editor = host.firstResponder as? NSTextView else { return }
+            // A text field selects its text when it takes focus: put the cursor at the end.
+            editor.selectedRange = NSRange(location: editor.string.utf16.count, length: 0)
+        }
+    }
+
+    /// Keys while the comment field is open. Returns true when the key was used; the others
+    /// type into the field.
+    private func commentKey(_ e: NSEvent) -> Bool {
+        guard state.phase == .annotate, !finished else { return false }
+        let editor = keyPanel?.firstResponder as? NSTextView
+        // An input method is composing: ⏎ and Esc are its keys.
+        if editor?.hasMarkedText() == true { return false }
+        let mods = e.modifierFlags.intersection([.command, .shift, .control, .option])
+        // ⌃ alone, or with ⌥ still held from the click.
+        let control = mods == .control || mods == [.control, .option]
+        switch Int(e.keyCode) {
+        case kVK_Escape:
+            finish()
+        case kVK_Return, kVK_ANSI_KeypadEnter:
+            if mods == .shift {
+                editor?.insertNewlineIgnoringFieldEditor(nil)
+                return true
+            }
+            guard mods.isEmpty || mods == .command else { return false }
+            if sendWhenFrozen == nil { sendTo = select?.target() }
+            send(steer: mods == .command)
+        case kVK_Tab where mods.subtracting(.shift).isEmpty: // ⇥ / ⇧⇥: the chat it goes to
+            guard sendWhenFrozen == nil else { return true } // ⏎ was pressed: the chat is set
+            select?.cycle(mods.contains(.shift) ? -1 : 1)
+            state.destination = select?.title() ?? ""
+        case kVK_ANSI_K where control, kVK_ANSI_P where control: keyboardStep(1)
+        case kVK_ANSI_J where control, kVK_ANSI_N where control: keyboardStep(-1)
+        case kVK_ANSI_H where control: sibling(-1)
+        case kVK_ANSI_L where control: sibling(1)
+        default: return false
+        }
+        return true
+    }
+
+    /// A click outside the comment field moves the selection to what is under the pointer.
+    /// The comment stays.
+    private func repick(at p: CGPoint) {
+        guard state.phase == .annotate, !finished else { return }
+        navigation += 1
+        let generation = navigation
+        probe.probe(at: p) { [weak self] result in
+            guard let self, self.navigation == generation, !self.finished, !result.frames.isEmpty else { return }
+            self.state.region = nil
+            self.state.preset = nil
+            self.textSelection = nil
+            self.state.pointer = p
+            self.state.resetLevel()
+            self.state.setProbe(result)
+        }
+    }
+
+    /// A dragged rectangle is the selection. It has no element, so look up its window for the
+    /// agent's context.
+    private func selectRegion(_ rect: CGRect) {
+        guard rect.width >= 4, rect.height >= 4 else { return }
+        navigation += 1
+        let generation = navigation
+        state.preset = nil
+        state.region = rect
+        probe.probe(at: CGPoint(x: rect.midX, y: rect.midY)) { [weak self] result in
+            guard let self, self.navigation == generation, !self.finished else { return }
+            self.state.setProbe(result)
+        }
+    }
+
+    /// ⏎: crops the selection out of the frozen screen and ends. `finish` waits for what the
+    /// agent should know about it.
+    private func send(steer: Bool) {
+        guard state.phase == .annotate, !finished, let rect = state.selection else { return }
+        guard captured else {
+            sendWhenFrozen = steer
+            return
+        }
+        if let clip = state.crop(rect) {
+            state.clips = [clip]
+            readContext(of: clip.id, rect: rect)
+            sending = steer
+        } else {
+            unsent = true
+        }
+        finish()
+    }
+
+    /// Select mode ends: the app gets its scroll, its clicks and its keyboard back.
+    private func leaveSelect() {
+        tap?.stop()
+        tap = nil
+        shareable?.cancel()
+        for w in windows { w.ignoresMouseEvents = true }
+        guard let keyPanel, keyPanel.isKeyWindow else { return }
+        keyPanel.resignKey()
+        previousApp?.activate()
     }
 
     /// Every normal window's frame now, by window number.
@@ -373,8 +743,19 @@ final class ClipController {
 final class ClipState {
     struct Frozen { let rect: CGRect; let image: CGImage? }
 
+    /// Clip mode, or select mode's two steps: `hover` while ⌃⌥ is held (live screen, no
+    /// focus), then `annotate` once a click opened the comment field (frozen screens).
+    enum Phase { case clip, hover, annotate }
+
     var active = false
+    var phase = Phase.clip
     var frozen: [Frozen] = []
+    /// Every screen's frame, to choose the one that shows the comment field.
+    var screens: [CGRect] = []
+    /// Select mode: a dragged rectangle is the selection, in place of an element.
+    var region: CGRect?
+    /// Select mode: the comment being written.
+    var comment = ""
     /// Window frames when the screens froze, by window number.
     @ObservationIgnored var frozenWindows: [CGWindowID: CGRect] = [:]
     /// Element frames under the pointer, smallest first, each one different from the others.
@@ -391,13 +772,13 @@ final class ClipState {
     var pointer: CGPoint?
     var added: [CGRect] = []
     var clips: [Clip] = []
-    /// Select mode: the title of the chat the picks go to ("" for none). Nil in ⌘P clip mode.
-    var destination: String?
-    /// Text selected when select mode started: shown as the highlight until the pointer moves.
+    /// Select mode: the title of the chat the comment goes to ("" for none).
+    var destination = ""
+    /// Select mode: text selected in the app in front, shown as the highlight while the
+    /// pointer is on it.
     var preset: ProbeResult?
     /// A navigation key moved the highlight: it wins over a saved clip under the pointer.
     var navigating = false
-    @ObservationIgnored var presetPointer: CGPoint?
     private var scrollAccumulator: CGFloat = 0
     private var scrollThreshold: CGFloat = 40
     @ObservationIgnored private let haptics = ClipHaptics()
@@ -411,13 +792,37 @@ final class ClipState {
     var highlight: CGRect? {
         if let drag { return drag }
         if let i = hoveredSaved { return added[i] }
+        if let region { return region }
         if let r = preset?.frames.first { return r }
         return rect(at: level)
     }
 
+    /// Select mode: what the comment is about. A drag in progress is not it yet, so the
+    /// comment field stays where it is until the drag ends.
+    var selection: CGRect? {
+        region ?? preset?.frames.first ?? rect(at: level)
+    }
+
+    /// The screen that shows the comment field: the one the selection is mostly on.
+    var cardScreen: CGRect? {
+        guard let s = selection else { return nil }
+        return screens.max(by: { area($0.intersection(s)) < area($1.intersection(s)) })
+    }
+
+    /// The frozen frame of one screen, once it is captured.
+    func image(for screen: CGRect) -> CGImage? {
+        frozen.first { $0.rect == screen }?.image
+    }
+
+    /// Starts again at the element you most likely mean, as before any scroll.
+    func resetLevel() {
+        anchor = nil
+        depth = 0
+    }
+
     /// A short "role · name" label for the highlighted element.
     var highlightLabel: String? {
-        guard drag == nil, hoveredSaved == nil else { return nil }
+        guard drag == nil, hoveredSaved == nil, region == nil else { return nil }
         if preset != nil { return "Selected text" }
         guard let h = highlight, let i = chain.firstIndex(where: { $0.isSame(as: h) }) else { return nil }
         return chainLabels[i]
@@ -645,6 +1050,8 @@ final class ElementProbe: @unchecked Sendable {
     private var running = false
     private var next: (CGPoint, @MainActor (ProbeResult) -> Void)?
     private var manualAccessibilityPids = Set<pid_t>() // only touched on `queue`
+    /// Apps that did not answer in time, and until when they get no second try. Only touched on `queue`.
+    private var slowUntil: [pid_t: Date] = [:]
     private let me = ProcessInfo.processInfo.processIdentifier
 
     func probe(at point: CGPoint, _ done: @escaping @MainActor (ProbeResult) -> Void) {
@@ -706,9 +1113,11 @@ final class ElementProbe: @unchecked Sendable {
     private func siblingChain(of element: AXUIElement, direction: Int, pid: pid_t, windowID: CGWindowID?,
                               window: CGRect) -> ProbeResult? {
         var parent: CFTypeRef?, children: CFTypeRef?
+        // One key press, not a stream of hovers: a busy app gets more time to answer.
+        AXUIElementSetMessagingTimeout(element, 0.3)
         guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success,
               let par = parent, CFGetTypeID(par) == AXUIElementGetTypeID(),
-              { AXUIElementSetMessagingTimeout(par as! AXUIElement, 0.08); return true }(),
+              { AXUIElementSetMessagingTimeout(par as! AXUIElement, 0.3); return true }(),
               AXUIElementCopyAttributeValue(par as! AXUIElement, kAXChildrenAttribute as CFString, &children) == .success,
               let list = children as? [AXUIElement],
               let start = list.firstIndex(where: { CFEqual($0, element) }) else { return nil }
@@ -735,8 +1144,16 @@ final class ElementProbe: @unchecked Sendable {
             manualAccessibilityPids.insert(pid)
         }
         var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(app, Float(p.x), Float(p.y), &hit) == .success,
-              let element = hit else { return result }
+        var error = AXUIElementCopyElementAtPosition(app, Float(p.x), Float(p.y), &hit)
+        if error == .cannotComplete, slowUntil[pid].map({ $0 < Date() }) ?? true {
+            // The first answer of an app can take longer than the timeout. Ask once more with
+            // more time, so a still pointer does not stay on the window. An app that is still
+            // silent gets no second try for a moment: the highlight must not lag behind it.
+            AXUIElementSetMessagingTimeout(app, 0.3)
+            error = AXUIElementCopyElementAtPosition(app, Float(p.x), Float(p.y), &hit)
+            slowUntil[pid] = error == .cannotComplete ? Date().addingTimeInterval(2) : nil
+        }
+        guard error == .success, let element = hit else { return result }
         return withPage(chain(from: element, pid: pid, windowID: windowID, window: window), at: p)
     }
 
@@ -926,25 +1343,35 @@ final class ElementProbe: @unchecked Sendable {
 
 // MARK: - Overlay
 
-/// One screen's overlay: the frozen frame, dimmed everywhere except the highlight.
+/// One screen's overlay. Clip mode: the frozen frame, dimmed everywhere except the highlight.
+/// Select mode: only the highlight on the live screen while ⌃⌥ is held, then the frozen
+/// frame, the dim and the comment field once you click.
 private struct ClipOverlayView: View {
     let state: ClipState
     let screenRect: CGRect
-    let image: CGImage?
     let onHover: (CGPoint) -> Void
     let onAdd: (CGRect) -> Void
     let onRemove: (Int) -> Void
+    /// Select mode: a click outside the comment field.
+    let onClick: (CGPoint) -> Void
+    /// Select mode: the comment field is on this screen now.
+    let onCommentShown: () -> Void
+    @State private var cardSize = CGSize(width: CommentCard.width, height: 64)
+    /// A press that started on the comment card is not a pick.
+    @State private var pressOnCard: Bool?
 
     var body: some View {
         let highlight = state.highlight.map(local)
+        let selecting = state.phase != .clip
         ZStack(alignment: .topLeading) {
-            if let image {
+            if let image = state.image(for: screenRect) {
                 Image(decorative: image, scale: CGFloat(image.width) / screenRect.width)
                     .resizable()
                     .frame(width: screenRect.width, height: screenRect.height)
             }
-            // Dim with a hole where the highlight is.
-            Rectangle().fill(.black.opacity(state.active ? 0.38 : 0))
+            // Dim with a hole where the highlight is. Not while ⌃⌥ is only held: the screen
+            // is live then, and nothing but the highlight shows.
+            Rectangle().fill(.black.opacity(state.active && state.phase != .hover ? 0.38 : 0))
                 .overlay(alignment: .topLeading) {
                     if let h = highlight {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -962,18 +1389,21 @@ private struct ClipOverlayView: View {
                     .offset(x: l.minX, y: l.minY)
                     .transition(.opacity.combined(with: .scale(1.04)))
             }
-            // The pointer: a small white dot that morphs into the selection outline when an
-            // element is under it or a drag starts, and back to a dot when nothing is.
-            if state.active, let shape = highlight ?? state.pointer.map({ p in
+            // Clip mode's pointer: a small white dot that morphs into the selection outline
+            // when an element is under it or a drag starts, and back to a dot when nothing is.
+            // Select mode keeps the real pointer and outlines in the accent colour, with a
+            // tint while the screen is live, so the outline shows on any background.
+            if state.active, let shape = highlight ?? (selecting ? nil : state.pointer.map({ p in
                 let l = local(CGRect(origin: p, size: .zero))
                 return CGRect(x: l.minX - 6, y: l.minY - 6, width: 12, height: 12)
-            }) {
+            })) {
                 let isDot = highlight == nil
+                let fill = selecting ? Color.accentColor.opacity(state.phase == .hover ? 0.08 : 0) : .white.opacity(isDot ? 0.95 : 0)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.white.opacity(isDot ? 0.95 : 0))
+                    .fill(fill)
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
-                    .shadow(color: .black.opacity(isDot ? 0.35 : 0), radius: 2)
+                        .strokeBorder(selecting ? Color.accentColor : .white.opacity(0.9), lineWidth: selecting ? 2 : 1.5))
+                    .shadow(color: .black.opacity(isDot || selecting ? 0.35 : 0), radius: 2)
                     .frame(width: shape.width, height: shape.height)
                     .offset(x: shape.minX, y: shape.minY)
                     .allowsHitTesting(false)
@@ -986,7 +1416,7 @@ private struct ClipOverlayView: View {
                     .background(.black.opacity(0.72), in: .capsule)
                     .foregroundStyle(.white)
                     .fixedSize()
-                    .offset(x: max(h.minX, 4), y: h.minY >= 24 ? h.minY - 22 : h.minY + 4)
+                    .offset(x: max(h.minX, 4), y: Self.labelIsAbove(h) ? h.minY - 22 : h.minY + 4)
                     .allowsHitTesting(false)
                     .transition(.opacity)
             }
@@ -999,21 +1429,20 @@ private struct ClipOverlayView: View {
                     .allowsHitTesting(false)
                     .transition(.blurReplace.combined(with: .scale(0.6)))
             }
-        }
-        .overlay(alignment: .bottom) {
-            // Select mode: where the picks go, and the keys. On the screen with the pointer.
-            if state.active, let title = state.destination,
-               let p = state.pointer, screenRect.contains(p) {
-                SelectHint(title: title, picks: state.added.count)
-                    .padding(.bottom, 28)
-                    .allowsHitTesting(false)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            // Select mode's comment field, beside the selection, on the screen it is mostly on.
+            if state.active, state.phase == .annotate, state.cardScreen == screenRect, let card = cardFrame {
+                CommentCard(state: state)
+                    .onGeometryChange(for: CGSize.self, of: { $0.size }) { cardSize = $0 }
+                    .offset(x: card.minX, y: card.minY)
+                    .onAppear(perform: onCommentShown)
+                    .transition(.opacity.combined(with: .scale(0.96)))
             }
         }
         .frame(width: screenRect.width, height: screenRect.height, alignment: .topLeading)
         .animation(Motion.select, value: state.highlight)
+        .animation(Motion.select, value: state.selection) // the comment field moves with it
         .animation(Motion.snappy, value: state.hoveredSaved)
-        .animation(Motion.content, value: state.active)
+        .animation(selecting ? Motion.hold : Motion.content, value: state.active)
         .contentShape(Rectangle())
         .onContinuousHover(coordinateSpace: .local) { phase in
             if case .active(let p) = phase, state.drag == nil { onHover(global(p)) }
@@ -1021,6 +1450,8 @@ private struct ClipOverlayView: View {
         .gesture(
             DragGesture(minimumDistance: 0, coordinateSpace: .local)
                 .onChanged { v in
+                    if pressOnCard == nil { pressOnCard = cardFrame?.insetBy(dx: -4, dy: -4).contains(v.startLocation) ?? false }
+                    guard pressOnCard == false else { return }
                     let start = global(v.startLocation), now = global(v.location)
                     state.pointer = now
                     if hypot(now.x - start.x, now.y - start.y) > 4 {
@@ -1029,9 +1460,13 @@ private struct ClipOverlayView: View {
                     }
                 }
                 .onEnded { v in
+                    defer { pressOnCard = nil }
+                    guard pressOnCard == false else { return }
                     if let d = state.drag {
                         state.drag = nil
                         onAdd(d)
+                    } else if state.phase == .annotate {
+                        onClick(global(v.location)) // a click moves the selection
                     } else if let i = state.hoveredSaved {
                         onRemove(i) // a click on a saved clip removes it
                     } else if let h = state.highlight {
@@ -1043,33 +1478,23 @@ private struct ClipOverlayView: View {
         .ignoresSafeArea()
     }
 
+    /// The label sits above the highlight when there is room, else inside its top edge.
+    private static func labelIsAbove(_ highlight: CGRect) -> Bool { highlight.minY >= 24 }
+
+    /// Where the comment card is on this screen, while it shows here.
+    private var cardFrame: CGRect? {
+        guard state.phase == .annotate, state.cardScreen == screenRect, let h = state.selection.map(local) else { return nil }
+        // Room for the label above an element, whether or not it shows during a drag.
+        let clear: CGFloat = state.region == nil && Self.labelIsAbove(h) ? 24 : 0
+        return CGRect(origin: CommentPlacement.origin(card: cardSize, beside: h, in: screenRect.size, clearAbove: clear),
+                      size: cardSize)
+    }
+
     private func local(_ r: CGRect) -> CGRect {
         r.offsetBy(dx: -screenRect.minX, dy: -screenRect.minY)
     }
 
     private func global(_ p: CGPoint) -> CGPoint {
         CGPoint(x: p.x + screenRect.minX, y: p.y + screenRect.minY)
-    }
-}
-
-/// Select mode's bar: the chat the picks go to, and the keys.
-private struct SelectHint: View {
-    let title: String
-    let picks: Int
-
-    var body: some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.turn.down.right").foregroundStyle(.secondary)
-                Text(title.isEmpty ? "No chat" : title).fontWeight(.semibold).lineLimit(1)
-                    .frame(maxWidth: 260, alignment: .leading).fixedSize(horizontal: true, vertical: false)
-                if picks > 0 { Text("\(picks)").monospacedDigit().foregroundStyle(.secondary) }
-            }
-            Text("⇥ chat   j k level   h l sibling   ⏎ add   ⇧ click more   esc")
-                .foregroundStyle(.secondary)
-        }
-        .font(.system(size: 12))
-        .padding(.horizontal, 14).padding(.vertical, 9)
-        .glassEffect(.regular, in: .capsule)
     }
 }

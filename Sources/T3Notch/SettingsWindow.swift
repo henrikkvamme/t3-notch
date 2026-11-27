@@ -303,7 +303,7 @@ private struct SettingsView: View {
             divider
             row("Show commands while working", isOn: $model.showToolSteps)
             divider
-            row("Select with ⌃⌥", caption: "Tap Control and Option in any app to select what is under the pointer",
+            row("Select with ⌃⌥", caption: "Hold Control and Option in any app, then click to comment on what is under the pointer",
                 isOn: $model.controlOptionSelect)
             divider
             extensionRow
