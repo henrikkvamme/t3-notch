@@ -76,6 +76,23 @@ enum Motion {
     static let hold = Animation.smooth(duration: 0.16)
 }
 
+/// The app answers an accessibility hit test with its top window. In select mode that is the
+/// overlay over the screen, so a pick on the island found nothing inside it. A point on the
+/// open island goes to the island's own window: its text, its buttons, and the elements of a
+/// page in it.
+final class NotchApplication: NSApplication {
+    weak var island: NSWindow?
+
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? {
+        if let island, let primary = NSScreen.screens.first, let open = IslandWindow.current,
+           open.rect.contains(CGPoint(x: point.x, y: primary.frame.maxY - point.y)),
+           let hit = island.accessibilityHitTest(point) {
+            return hit
+        }
+        return super.accessibilityHitTest(point)
+    }
+}
+
 /// Shows, hides and animates the island. The panel is a fixed canvas top-centred on the
 /// chosen screen; clicks pass through everywhere except the island itself.
 @MainActor
@@ -673,6 +690,7 @@ final class PanelController {
     private func publishIsland() {
         guard ui.mode != .hidden, let primary = NSScreen.screens.first else { IslandWindow.current = nil; return }
         let r = islandScreenRect
+        (NSApp as? NotchApplication)?.island = panel
         IslandWindow.current = (CGWindowID(panel.windowNumber),
                                 CGRect(x: r.minX, y: primary.frame.maxY - r.maxY, width: r.width, height: r.height))
     }

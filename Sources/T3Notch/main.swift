@@ -185,7 +185,7 @@ if CommandLine.arguments.contains("--demo") { Store.demo = true }
 // walk never ends on macOS 27 and hangs the main thread. The island has no password fields.
 UserDefaults.standard.register(defaults: ["NSAutoFillHeuristicsEnabled": false])
 
-let app = NSApplication.shared
+let app = NotchApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()
 app.delegate = delegate
