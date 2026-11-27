@@ -14,7 +14,7 @@ struct ReplyContent: View {
             ForEach(Array(Self.segments(text).enumerated()), id: \.offset) { _, segment in
                 switch segment {
                 case .text(let t):
-                    ForEach(Array(Self.blocks(t).enumerated()), id: \.offset) { _, block in
+                    ForEach(Array(Self.cachedBlocks(t).enumerated()), id: \.offset) { _, block in
                         BlockView(block: block)
                     }
                 case .image(let src, let alt):
@@ -46,6 +46,17 @@ struct ReplyContent: View {
 
     /// The block structure of markdown text: headings, lists, code, quotes, rules and
     /// tables and paragraphs. Inline marks (bold, code, links) stay in each block's text.
+    /// The parsed form of the texts shown last, so a redraw of the island does not parse again.
+    @MainActor private static var parsed: [String: [Block]] = [:]
+
+    @MainActor static func cachedBlocks(_ text: String) -> [Block] {
+        if let hit = parsed[text] { return hit }
+        if parsed.count > 60 { parsed.removeAll() }
+        let made = blocks(text)
+        parsed[text] = made
+        return made
+    }
+
     static func blocks(_ text: String) -> [Block] {
         var out: [Block] = []
         var paragraph: [String] = [], items: [Item] = [], quote: [String] = [], code: [String]?, table: [String] = []

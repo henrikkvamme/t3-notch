@@ -565,6 +565,9 @@ final class PanelController {
         syncedDraft = nil
     }
 
+    /// A text that T3's field did not keep as the island wrote it.
+    private var refusedDraft: String?
+
     private func syncDraft() {
         guard !draftSyncBusy else { return }
         guard let target = composerTarget else { syncedDraft = nil; return }
@@ -572,6 +575,9 @@ final class PanelController {
         draftSyncBusy = true
         // You typed in the island: T3's field takes it.
         if let synced = syncedDraft, !Self.sameDraft(mine, synced) {
+            // T3 did not keep this text as written: the same write again would not help.
+            if let refused = refusedDraft, refused == mine { draftSyncBusy = false; return }
+            refusedDraft = nil
             // Look first: text typed in T3 since the last round must not be written over.
             composer.read(pid: target.pid, chatTitle: target.title) { [weak self] theirs in
                 guard let self else { return }
@@ -591,6 +597,7 @@ final class PanelController {
                     guard self.composerTarget?.chat == target.chat else { self.syncedDraft = nil; return }
                     self.syncedDraft = now
                     if let now, !Self.sameDraft(now, mine) {
+                        self.refusedDraft = mine
                         self.draftLog.notice("T3 keeps the draft differently: wrote \(mine.count, privacy: .public), has \(now.count, privacy: .public)")
                     }
                 }
@@ -606,8 +613,17 @@ final class PanelController {
                 return
             }
             if let synced = self.syncedDraft {
-                // You typed in T3: the island takes it.
-                if !Self.sameDraft(text, synced) { self.ui.draft = text; self.syncedDraft = text }
+                guard !Self.sameDraft(text, synced) else { return }
+                if self.panel.isKeyWindow, !mine.isEmpty {
+                    // The island has the keyboard, so you did not type in T3: its editor
+                    // changed the text by itself (it can bring back text that a write took
+                    // out). What you see in the island stays. The next round writes it again.
+                    self.syncedDraft = text
+                } else {
+                    // You typed in T3: the island takes it.
+                    self.ui.draft = text
+                    self.syncedDraft = text
+                }
             } else if mine.isEmpty || Self.sameDraft(text, mine) {
                 // The island had nothing of its own: T3's draft is the draft.
                 if !Self.sameDraft(text, mine) { self.ui.draft = text }

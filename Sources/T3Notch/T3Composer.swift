@@ -26,6 +26,9 @@ final class T3Composer: @unchecked Sendable {
             var now: String?
             if let field = self.field(pid: pid, chatTitle: chatTitle),
                AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, text as CFString) == .success {
+                // T3's editor takes the new text in its own time. A caret set before that makes
+                // it draw its old text again, so wait a moment and read what it kept.
+                usleep(60_000)
                 now = Self.string(field, kAXValueAttribute)
                 Self.place(caret: caret, in: field, length: (now ?? text).utf16.count)
             }

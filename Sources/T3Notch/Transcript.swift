@@ -118,6 +118,8 @@ private struct PageFrame: View {
     @State private var failed = false
     @State private var fitted: CGFloat?
     @State private var width: CGFloat = 0
+    /// A web view is costly: the page loads when its frame first comes into view.
+    @State private var seen = false
 
     /// T3's rule (`htmlRenderFrameHeight`): the page's own height once it is known, else the
     /// height T3 measured for this width. The island caps it lower than T3 does.
@@ -145,7 +147,9 @@ private struct PageFrame: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width = $0 }
         }
-        .task(id: attachment) {
+        .onScrollVisibilityChange(threshold: 0.05) { visible in if visible { seen = true } }
+        .task(id: seen ? attachment : "") {
+            guard seen else { return }
             request = await store.pageRequest(attachment)
             failed = request == nil
         }
