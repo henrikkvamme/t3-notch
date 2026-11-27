@@ -439,10 +439,15 @@ final class PanelController {
 
     func sendDraft(steer: Bool) {
         let text = ui.draft
-        let images = ui.clips.map(\.png)
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
+        let clips = ui.clips
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
+        // Keep the draft when the selections cannot go in one message.
+        guard Store.clipPlan(clips) != nil else {
+            store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
+            return
+        }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        Task { await store.send(text, steer: steer, images: images) }
+        Task { await store.send(text, steer: steer, clips: clips) }
         hide() // sent: tuck the island away and hand focus back
     }
 
