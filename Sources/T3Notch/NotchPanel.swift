@@ -60,6 +60,8 @@ struct NotchGeometry: Equatable {
 enum Motion {
     /// Growing out of the notch: a little overshoot, like the Dynamic Island.
     static let open = Animation.bouncy(duration: 0.5, extraBounce: 0.08)
+    /// The small peek under the pointer: no overshoot, so the row does not move after it lands.
+    static let hover = Animation.smooth(duration: 0.26)
     /// Shrinking back into the notch: no overshoot.
     static let close = Animation.smooth(duration: 0.34)
     /// Content changes inside the open island.
@@ -150,12 +152,19 @@ final class PanelController {
             guard let self else { return false }
             return !self.ui.draft.isEmpty || !self.ui.clips.isEmpty || self.clipper != nil || self.ui.sending > 0
         }
-        // A scroll up on a peek asks for more than it shows: the island opens, with the history.
+        // A scroll on a peek asks for more than it shows. The small peek is one chat's row, so
+        // it opens the list of chats around that row. The full peek opens with the history.
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             MainActor.assumeIsolated {
-                guard let self, self.ui.mode == .peek, event.scrollingDeltaY > 3, self.ui.replyOffset <= 0,
-                      event.window === self.panel else { return }
-                self.expand()
+                guard let self, self.ui.mode == .peek, event.window === self.panel else { return }
+                if self.ui.peekCompact, self.store.pendingRequest == nil {
+                    guard abs(event.scrollingDeltaY) > 3, self.store.connection == .connected,
+                          self.ui.onboarding == nil else { return }
+                    self.expand()
+                    if !self.ui.pickerOpen { self.setPicker(true) }
+                } else if event.scrollingDeltaY > 3, self.ui.replyOffset <= 0 {
+                    self.expand()
+                }
             }
             return event
         }
@@ -394,7 +403,7 @@ final class PanelController {
         ui.peekSticky = !autoHide && !compact
         place(on: NotchGeometry.screenUnderMouse())
         present()
-        animateMode(.peek, afterLayout: true)
+        animateMode(.peek, afterLayout: true, with: compact ? Motion.hover : Motion.open)
         if autoHide { schedulePeekHide(after: 8) }
     }
 
@@ -618,10 +627,13 @@ final class PanelController {
 
     /// Sets the mode with the open spring. From hidden, wait one runloop turn so the
     /// collapsed island is on screen first and the spring has somewhere to start from.
-    private func animateMode(_ mode: Mode, afterLayout: Bool) {
+    private func animateMode(_ mode: Mode, afterLayout: Bool, with animation: Animation = Motion.open) {
         let apply: @MainActor @Sendable () -> Void = { [weak self] in
             guard let self else { return }
-            withAnimation(Motion.open) { self.ui.mode = mode }
+            withAnimation(animation) {
+                self.ui.mode = mode
+                if mode == .expanded { self.ui.peekCompact = false }
+            }
             self.updateMouse()
         }
         if afterLayout { DispatchQueue.main.async(execute: apply) } else { apply() }

@@ -192,6 +192,8 @@ struct OverlayView: View {
 
     private var shown: Bool { ui.mode != .hidden }
     private var compact: Bool { ui.mode == .peek && ui.peekCompact && store.pendingRequest == nil }
+    /// The small peek under the pointer comes and goes with less motion than a full open.
+    private var calm: Bool { ui.peekCompact && ui.mode != .expanded }
     private var openWidth: CGFloat { ui.mode == .peek ? (compact ? 340 : 520) : 680 }
     /// The real notch's bottom corners are about this round.
     private var notchRadius: CGFloat { ui.hasRealNotch ? 10 : 12 }
@@ -210,9 +212,9 @@ struct OverlayView: View {
             .fixedSize(horizontal: false, vertical: true)
             // Content arrives after the shape opens and leaves before it closes.
             .opacity(shown ? 1 : 0)
-            .blur(radius: shown ? 0 : 12)
-            .scaleEffect(shown ? 1 : 0.9, anchor: .top)
-            .animation(shown ? Motion.open.delay(0.06) : .smooth(duration: 0.16), value: shown)
+            .blur(radius: shown ? 0 : (calm ? 6 : 12))
+            .scaleEffect(shown ? 1 : (calm ? 0.98 : 0.9), anchor: .top)
+            .animation(shown ? (calm ? Motion.hover : Motion.open.delay(0.06)) : .smooth(duration: 0.16), value: shown)
             // The shape: notch-sized when hidden, content-sized when shown.
             .frame(width: shown ? openWidth : ui.notchSize.width,
                    height: shown ? nil : ui.notchSize.height, alignment: .top)
