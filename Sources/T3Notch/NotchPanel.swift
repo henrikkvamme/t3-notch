@@ -647,10 +647,19 @@ final class PanelController {
         return NSRect(x: f.minX + r.minX, y: f.maxY - r.maxY, width: r.width, height: r.height)
     }
 
+    /// Tells select mode where the island is, so it can be picked as any app can.
+    private func publishIsland() {
+        guard ui.mode != .hidden, let primary = NSScreen.screens.first else { IslandWindow.current = nil; return }
+        let r = islandScreenRect
+        IslandWindow.current = (CGWindowID(panel.windowNumber),
+                                CGRect(x: r.minX, y: primary.frame.maxY - r.maxY, width: r.width, height: r.height))
+    }
+
     /// Lets clicks through the transparent canvas, tracks hover over the island, and
     /// peeks when the pointer rests on the notch while an agent works.
     private func updateMouse() {
         let p = NSEvent.mouseLocation
+        publishIsland()
         if ui.mode == .hidden {
             panel.ignoresMouseEvents = true
             setHovering(false)

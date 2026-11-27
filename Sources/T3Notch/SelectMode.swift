@@ -97,19 +97,21 @@ enum ScreenCapture {
     /// One frame per screen. `ahead` is content asked for earlier; it must list T3 Notch,
     /// or it is asked for again. An image is nil when its screen could not be captured.
     @MainActor
-    static func screens(_ ahead: Content?) async -> [ClipState.Frozen] {
+    static func screens(_ ahead: Content?, island: Bool = false) async -> [ClipState.Frozen] {
         let me = ProcessInfo.processInfo.processIdentifier
         var found = ahead
         if found?.value.applications.contains(where: { $0.processID == me }) != true { found = await content() }
         guard let content = found?.value else { return [] }
         let mine = content.applications.filter { $0.processID == me }
+        // The island itself is picked: it is in the picture. The overlays of select mode are not.
+        let kept = island ? IslandWindow.current.map { own in content.windows.filter { $0.windowID == own.id } } ?? [] : []
         var out: [ClipState.Frozen] = []
         for screen in NSScreen.screens {
             let rect = ClipController.globalRect(of: screen)
             var image: CGImage?
             if let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                let display = content.displays.first(where: { $0.displayID == id }) {
-                let filter = SCContentFilter(display: display, excludingApplications: mine, exceptingWindows: [])
+                let filter = SCContentFilter(display: display, excludingApplications: mine, exceptingWindows: kept)
                 let config = SCStreamConfiguration()
                 let scale = CGFloat(filter.pointPixelScale)
                 config.width = Int(rect.width * scale)
@@ -191,5 +193,18 @@ enum CommentPlacement {
         }
         return CGPoint(x: min(max(s.midX - card.width / 2, margin), screen.width - card.width - margin),
                        y: min(s.maxY, screen.height) - margin - 2 - card.height)
+    }
+}
+
+/// Where the open island is on the screen, so select mode can pick the island itself. Set on
+/// the main thread, read on the probe's queue.
+enum IslandWindow {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var value: (id: CGWindowID, rect: CGRect)?
+
+    /// The island's window and its visible rectangle (top-left origin), or nil while it is closed.
+    static var current: (id: CGWindowID, rect: CGRect)? {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
     }
 }

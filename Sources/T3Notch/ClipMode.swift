@@ -598,10 +598,11 @@ final class ClipController {
         state.frozenWindows = Self.windowFrames()
         if region { selectRegion(rect) }
         withAnimation(Motion.content) { state.phase = .annotate }
+        let island = state.probe.pid == ProcessInfo.processInfo.processIdentifier
         // Capture before the overlays take the pointer and the keyboard. Until then the app
         // keeps what its hover and focus show (a tooltip, an open menu), so the picture has it.
         Task { [weak self, shareable] in
-            let frozen = await ScreenCapture.screens(await shareable?.value)
+            let frozen = await ScreenCapture.screens(await shareable?.value, island: island)
             guard let self, !self.finished else { return }
             self.state.frozen = frozen
             self.captured = true
@@ -740,8 +741,9 @@ final class ClipController {
     /// now, so it shows what you picked. The overlays are not in it.
     private func refreeze() {
         captured = false
+        let island = state.probe.pid == ProcessInfo.processInfo.processIdentifier
         Task { [weak self, shareable] in
-            let frozen = await ScreenCapture.screens(await shareable?.value)
+            let frozen = await ScreenCapture.screens(await shareable?.value, island: island)
             guard let self, !self.finished else { return }
             if !frozen.isEmpty { self.state.frozen = frozen }
             self.captured = true
@@ -1240,7 +1242,7 @@ final class ElementProbe: @unchecked Sendable {
         guard Permission.accessibility.isGranted else { return result }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.08)
-        if !manualAccessibilityPids.contains(pid) {
+        if pid != me, !manualAccessibilityPids.contains(pid) {
             // Electron apps only build their element tree when asked for it.
             AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
             manualAccessibilityPids.insert(pid)
@@ -1404,6 +1406,8 @@ final class ElementProbe: @unchecked Sendable {
     private func windowAt(_ p: CGPoint) -> (pid_t, CGWindowID?, CGRect)? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
+        // The open island is above every app, and it can be picked as any app can.
+        if let island = IslandWindow.current, island.rect.contains(p) { return (me, island.id, island.rect) }
         for w in list {
             guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, pid != me,
                   NSRunningApplication(processIdentifier: pid)?.activationPolicy != .prohibited,
