@@ -1539,6 +1539,14 @@ enum Settings {
         set { setBinding(newValue, "toggleDotKey") }
     }
 
+    /// Global shortcut that turns select mode on and off. None by default: a tap of ⌃⌥ does it.
+    static var selectModeKey: KeyBinding? {
+        get { binding("selectModeKey") }
+        set {
+            if let newValue { setBinding(newValue, "selectModeKey") } else { UserDefaults.standard.removeObject(forKey: "selectModeKey") }
+        }
+    }
+
     /// The island's shortcut for the chat list. ⌘K by default.
     static var showChatsKey: KeyBinding {
         get { binding("showChatsKey") ?? .showChats }

@@ -99,6 +99,8 @@ final class Hotkey {
     private var ref: EventHotKeyRef?
     private let id: UInt32
     private(set) var binding: KeyBinding
+    /// False when macOS or another app owns the combination.
+    var isRegistered: Bool { ref != nil }
 
     init(_ binding: KeyBinding, id: UInt32, action: @escaping () -> Void) {
         self.id = id

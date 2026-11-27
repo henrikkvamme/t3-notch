@@ -870,6 +870,8 @@ final class PanelController {
             sendDraft(steer: !Settings.enterSteers); return true
         case 36 where answers: // ⏎
             Task { await store.respond(decision: "accept", request: request?.id) }; return true
+        case 36 where ui.pickerOpen && mods.isEmpty: // ⏎ opens the highlighted chat, whatever holds the keys
+            pickHighlighted(); return true
         case 125 where ui.pickerOpen: // ↓
             movePicker(by: 1); return true
         case 126 where ui.pickerOpen: // ↑
@@ -901,6 +903,7 @@ final class PanelController {
 
     func movePicker(by step: Int) {
         let last = max(ui.pickerCount - 1, 0)
+        ui.pickerByPointer = false
         ui.pickerIndex = min(max(ui.pickerIndex + step, 0), last) // the highlight animates itself
     }
 
@@ -1025,6 +1028,14 @@ final class PanelController {
         select.onPick = { [weak self] image, rect in self?.land(image, from: rect) }
         clipper = ClipController.startSelecting(select)
         if inTour { onboardingSelectHeld(started: clipper != nil) }
+    }
+
+    /// A short tap of ⌃⌥: select mode stays on with your hands free, until Esc, a sent
+    /// comment or a second tap.
+    func selectTap() {
+        if let clipper, clipper.isLatched { clipper.unlatch(); return }
+        if clipper == nil { selectHold(true) }
+        clipper?.latch()
     }
 
     private func selectEnded(_ end: ClipController.SelectEnd, islandHadKeys: Bool, inTour: Bool) {
@@ -1201,6 +1212,7 @@ final class PanelController {
         withAnimation(Motion.content) {
             ui.pickerOpen = open
             // Start on the focused chat, so ⏎ keeps it.
+            ui.pickerByPointer = false
             ui.pickerIndex = min(store.sidebarThreads.firstIndex { $0["key"].string == store.targetThreadId } ?? 0, 59)
             if !open { ui.pickerQuery = "" }
         }

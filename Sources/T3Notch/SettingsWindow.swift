@@ -86,11 +86,13 @@ final class SettingsModel {
         var openLogs: () -> Void
         var quit: () -> Void
         var rebind: (Shortcut, KeyBinding) -> Bool
+        /// Sets or clears (nil) the shortcut for select mode.
+        var setSelectKey: (KeyBinding?) -> Bool
         var pauseShortcuts: (Bool) -> Void
         var showWelcome: () -> Void
     }
 
-    enum Shortcut { case showIsland, toggleDot, showChats, openInT3 }
+    enum Shortcut { case showIsland, toggleDot, showChats, openInT3, selectMode }
 
     /// The shortcut being recorded, if any; the next key press sets it.
     var recording: Shortcut?
@@ -100,6 +102,7 @@ final class SettingsModel {
     var toggleDotKey = Settings.toggleDotKey
     var showChatsKey = Settings.showChatsKey
     var openInT3Key = Settings.openInT3Key
+    var selectModeKey = Settings.selectModeKey
 
     func startRecording(_ shortcut: Shortcut) {
         taken = nil
@@ -115,15 +118,28 @@ final class SettingsModel {
     /// Applies a recorded key press. Returns false when it is not a usable shortcut.
     @discardableResult
     func record(_ event: NSEvent) -> Bool {
+        // ⌫ alone clears the one shortcut that may be empty.
+        if recording == .selectMode, event.keyCode == 51,
+           event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty {
+            recording = nil
+            actions.pauseShortcuts(false)
+            if actions.setSelectKey(nil) { selectModeKey = nil }
+            return true
+        }
         guard let shortcut = recording, let binding = KeyBinding(event: event) else { return false }
         recording = nil
         actions.pauseShortcuts(false)
+        if shortcut == .selectMode {
+            if actions.setSelectKey(binding) { selectModeKey = binding } else { taken = shortcut }
+            return true
+        }
         if actions.rebind(shortcut, binding) {
             switch shortcut {
             case .showIsland: showIslandKey = binding
             case .toggleDot: toggleDotKey = binding
             case .showChats: showChatsKey = binding
             case .openInT3: openInT3Key = binding
+            case .selectMode: break
             }
         } else {
             taken = shortcut
@@ -310,7 +326,7 @@ private struct SettingsView: View {
             divider
             row("Show thinking while working", caption: "In place of the last reply. Off: one line names the step", isOn: $model.showThinking)
             divider
-            row("Select with ⌃⌥", caption: "Hold Control and Option in any app, then click to comment on what is under the pointer",
+            row("Select with ⌃⌥", caption: "Hold Control and Option in any app, then click to comment on what is under the pointer. Tap them and select mode stays on until Esc",
                 isOn: $model.controlOptionSelect)
             divider
             extensionRow
@@ -326,6 +342,8 @@ private struct SettingsView: View {
             shortcutRow("Show chats", .showChats, model.showChatsKey)
             divider
             shortcutRow("Open in T3", .openInT3, model.openInT3Key)
+            divider
+            shortcutRow("Select mode", .selectMode, model.selectModeKey)
             divider
             HStack {
                 Text("Welcome tour").font(.system(size: 13))
@@ -422,9 +440,9 @@ private struct SettingsView: View {
     }
 
     /// A shortcut and its recorder: click it, press the new keys.
-    private func shortcutRow(_ title: String, _ shortcut: SettingsModel.Shortcut, _ binding: KeyBinding) -> some View {
+    private func shortcutRow(_ title: String, _ shortcut: SettingsModel.Shortcut, _ binding: KeyBinding?) -> some View {
         let recording = model.recording == shortcut
-        let label = recording ? "Press keys" : model.taken == shortcut ? "Taken" : binding.label
+        let label = recording ? "Press keys" : model.taken == shortcut ? "Taken" : binding?.label ?? "None"
         return HStack {
             Text(title).font(.system(size: 13))
             Spacer(minLength: 12)
@@ -433,7 +451,8 @@ private struct SettingsView: View {
             } label: {
                 Text(label)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(recording ? Color.accentColor : model.taken == shortcut ? .red : .primary)
+                    .foregroundStyle(recording ? Color.accentColor : model.taken == shortcut ? .red
+                                     : binding == nil ? .secondary : .primary)
                     .contentTransition(.opacity)
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .frame(minWidth: 70)

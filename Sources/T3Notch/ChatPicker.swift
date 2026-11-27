@@ -29,6 +29,25 @@ struct ChatPicker: View {
                 }
                 .scrollIndicators(.never)
                 .frame(maxHeight: .infinity, alignment: .top)
+                // The row under the pointer is the highlighted one, also while the list scrolls
+                // under a pointer that is still. The keys take over until the pointer or the
+                // list moves again.
+                .onContinuousHover(coordinateSpace: .local) { phase in
+                    switch phase {
+                    case .active(let p):
+                        ui.pickerPointer = p
+                        ui.pickUnderPointer()
+                    case .ended:
+                        ui.pickerPointer = nil
+                    }
+                }
+                .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y + $0.contentInsets.top }) { _, y in
+                    ui.pickerScrollY = y
+                    if ui.pickerByPointer { ui.pickUnderPointer() }
+                }
+                .onScrollPhaseChange { _, phase in
+                    if phase == .interacting { ui.pickerByPointer = true }
+                }
             }
         }
         .animation(Motion.content, value: ui.pickerQuery)
@@ -78,6 +97,6 @@ private struct PickerHighlight: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .allowsHitTesting(false)
-        .onChange(of: ui.pickerIndex) { _, i in proxy.scrollTo(i) }
+        .onChange(of: ui.pickerIndex) { _, i in if !ui.pickerByPointer { proxy.scrollTo(i) } }
     }
 }

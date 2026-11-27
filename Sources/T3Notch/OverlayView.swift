@@ -16,6 +16,21 @@ final class OverlayUIState {
     var pickerCount = 0
     /// Each picker row's frame, so the selection highlight can slide between them.
     var pickerRowFrames: [Int: CGRect] = [:]
+    /// The pointer chose the highlighted row, so the list must not scroll to it.
+    @ObservationIgnored var pickerByPointer = false
+    /// The pointer's place in the list's own area, and how far the list is scrolled.
+    @ObservationIgnored var pickerPointer: CGPoint?
+    @ObservationIgnored var pickerScrollY: CGFloat = 0
+
+    /// Highlights the row under the pointer, so ⏎ opens the chat you point at.
+    func pickUnderPointer() {
+        guard let p = pickerPointer else { return }
+        let y = p.y + pickerScrollY
+        guard let i = pickerRowFrames.first(where: { $0.value.minY <= y && y < $0.value.maxY })?.key,
+              i < pickerCount, i != pickerIndex else { return }
+        pickerByPointer = true
+        pickerIndex = i
+    }
     var hovering = false
     /// A selection is on its way to the island: its place in the row is kept free.
     var landing = false

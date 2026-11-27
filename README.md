@@ -28,7 +28,8 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
   a rectangle, and the clip is attached to your next message as an image.
 - **Comment on anything.** Hold ⌃⌥ in any app and the element under the pointer lights up. Click it, type a
   comment, and ⏎ puts the picture of it with your comment in the island, ready to send to the chat. The island
-  does not have to be open.
+  does not have to be open. Tap ⌃⌥ and select mode stays on with your hands free: ⎋, a second tap or a
+  finished comment ends it. Settings can give the mode a shortcut of its own (⌫ while recording clears it).
 - **Answer approvals.** When the agent asks for permission or has a question, the island opens with the
   request. ⏎ accepts, ⌘⏎ accepts for the session, ⌘⌫ declines. ⎋ only closes the island, and ⏎ accepts
   only when the message field is empty and the request has been in view for a moment. A request in another

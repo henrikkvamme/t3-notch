@@ -495,9 +495,23 @@ final class ClipController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.release() }
     }
 
+    /// Select mode stays on with the keys up (a tap of ⌃⌥ did it). The keys going up, or
+    /// another key, no longer end it: Esc, a sent comment or a second tap does.
+    private(set) var isLatched = false
+
+    func latch() {
+        guard select != nil, !finished else { return }
+        isLatched = true
+    }
+
+    func unlatch() {
+        isLatched = false
+        release()
+    }
+
     /// Ends the hold, unless a click is under way: then the button going up opens the comment.
     private func release() {
-        guard state.phase == .hover, !finished, pressAt == nil, !clicking else { return }
+        guard !isLatched, state.phase == .hover, !finished, pressAt == nil, !clicking else { return }
         released = true
         finish()
     }
@@ -520,7 +534,12 @@ final class ClipController {
         if type == .keyDown {
             // Before the click, a key is the app's. After it, what you type is the comment: the
             // field takes the keyboard a moment later and gets these keys then.
-            guard state.phase != .hover else { return false }
+            if state.phase == .hover {
+                // In the mode that stays, Esc leaves it. Every other key is the app's.
+                guard isLatched, event.getIntegerValueField(.keyboardEventKeycode) == Int64(kVK_Escape) else { return false }
+                unlatch()
+                return true
+            }
             if !event.flags.contains(.maskCommand), !event.flags.contains(.maskControl),
                let chars = NSEvent(cgEvent: event)?.characters,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
@@ -634,7 +653,8 @@ final class ClipController {
         // A scroll still changes the level while ⌃⌥ is held, as before the click.
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
             MainActor.assumeIsolated {
-                guard let self, e.modifierFlags.isSuperset(of: [.control, .option]), self.state.region == nil else { return }
+                guard let self, self.isLatched || e.modifierFlags.isSuperset(of: [.control, .option]),
+                      self.state.region == nil else { return }
                 if self.state.preset != nil { _ = self.leavePreset() } else { self.state.scroll(e) }
             }
             return nil

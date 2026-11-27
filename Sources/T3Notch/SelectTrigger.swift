@@ -15,7 +15,14 @@ final class SelectTrigger {
     /// The keys of the hold, as the welcome tour draws them. Change them with `flagsChanged`.
     static let keycaps = [KeyCap(symbol: "⌃", name: "control"), KeyCap(symbol: "⌥", name: "option")]
 
+    /// A tap is ⌃⌥ down and up again within this time, with nothing else pressed.
+    static let tap: TimeInterval = 0.3
+
     private let onHold: (Bool) -> Void
+    /// A short tap of ⌃⌥: select mode stays on with the keys up (or goes off, if it stayed).
+    private let onTap: () -> Void
+    /// When both keys went down, for the tap.
+    private var downAt: Date?
     private var monitors: [Any] = []
     private var detector = HoldDetector()
     /// What `onHold` was last told.
@@ -23,8 +30,9 @@ final class SelectTrigger {
     /// Bumped by every change, so a pending start that a newer change replaced is dropped.
     private var generation = 0
 
-    init(onHold: @escaping (Bool) -> Void) {
+    init(onHold: @escaping (Bool) -> Void, onTap: @escaping () -> Void) {
         self.onHold = onHold
+        self.onTap = onTap
         let flags: (NSEvent) -> Void = { [weak self] e in
             MainActor.assumeIsolated { self?.flagsChanged(e.modifierFlags) }
         }
@@ -34,6 +42,7 @@ final class SelectTrigger {
                 // Once select mode shows, the left button and the scroll are its own.
                 if self.reported, [.leftMouseDown, .scrollWheel].contains(e.type) { return }
                 guard self.detector.interrupt() else { return }
+                self.downAt = nil
                 self.changed()
             }
         }
@@ -50,6 +59,7 @@ final class SelectTrigger {
     /// are, the hold goes on: select mode shows again at once.
     func resume() {
         detector = HoldDetector()
+        downAt = nil
         generation += 1
         reported = false
         flagsChanged(NSEvent.modifierFlags, delay: 0)
@@ -57,8 +67,15 @@ final class SelectTrigger {
 
     private func flagsChanged(_ flags: NSEvent.ModifierFlags, delay: TimeInterval = SelectTrigger.delay) {
         let mods = flags.intersection([.control, .option, .command, .shift, .function])
-        guard detector.update(control: mods.contains(.control), option: mods.contains(.option),
-                              other: !mods.subtracting([.control, .option]).isEmpty) else { return }
+        let other = !mods.subtracting([.control, .option]).isEmpty
+        guard detector.update(control: mods.contains(.control), option: mods.contains(.option), other: other) else { return }
+        if detector.held {
+            downAt = Date()
+        } else if let down = downAt {
+            // The keys went up with nothing else pressed (an interrupt clears `downAt`).
+            downAt = nil
+            if !other, Date().timeIntervalSince(down) < Self.tap, Self.enabled { onTap() }
+        }
         changed(delay: delay)
     }
 

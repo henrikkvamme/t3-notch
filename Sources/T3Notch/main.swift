@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var hotkey: Hotkey!
     private var dotHotkey: Hotkey!
+    /// The optional shortcut for select mode; nil while none is set.
+    private var selectHotkey: Hotkey?
     private var selectTrigger: SelectTrigger!
     private var settings: SettingsController!
     private var statusDot: StatusDotController!
@@ -19,8 +21,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey = Hotkey(Settings.showIslandKey, id: 1) { [weak self] in self?.panel.toggle() }
         // Hides or shows the status dot, e.g. while watching a film.
         dotHotkey = Hotkey(Settings.toggleDotKey, id: 2) { [weak self] in self?.toggleDot() }
-        selectTrigger = SelectTrigger { [weak self] held in self?.panel.selectHold(held) }
+        selectTrigger = SelectTrigger(onHold: { [weak self] held in self?.panel.selectHold(held) },
+                                      onTap: { [weak self] in self?.panel.selectTap() })
         panel.onSelectEnded = { [weak self] in self?.selectTrigger.resume() }
+        if let key = Settings.selectModeKey { selectHotkey = Hotkey(key, id: 3) { [weak self] in self?.panel.selectTap() } }
         BrowserBridge.shared.start()
         store.onAttentionNeeded = { [weak self] reason in
             guard let self, self.panel.mode != .expanded else { return }
@@ -53,8 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openLogs: { [weak self] in self?.openLogs() },
             quit: { NSApp.terminate(nil) },
             rebind: { [weak self] shortcut, binding in self?.rebind(shortcut, to: binding) ?? false },
+            setSelectKey: { [weak self] binding in self?.setSelectKey(binding) ?? false },
             pauseShortcuts: { [weak self] paused in
-                for h in [self?.hotkey, self?.dotHotkey] { paused ? h?.suspend() : h?.resume() }
+                for h in [self?.hotkey, self?.dotHotkey, self?.selectHotkey] { paused ? h?.suspend() : h?.resume() }
             },
             showWelcome: { [weak self] in
                 self?.settings.close()
@@ -147,7 +152,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .openInT3:
             guard islandKeyFree(binding, besides: Settings.showChatsKey) else { return false }
             Settings.openInT3Key = binding
+        case .selectMode:
+            return setSelectKey(binding)
         }
+        return true
+    }
+
+    /// Sets the global shortcut for select mode, or clears it (nil). False if the keys are taken.
+    private func setSelectKey(_ binding: KeyBinding?) -> Bool {
+        guard let binding else {
+            selectHotkey?.suspend()
+            selectHotkey = nil
+            Settings.selectModeKey = nil
+            return true
+        }
+        guard !binding.sameKeys(as: hotkey.binding), !binding.sameKeys(as: dotHotkey.binding) else { return false }
+        if let selectHotkey {
+            guard selectHotkey.rebind(binding) else { return false }
+        } else {
+            let made = Hotkey(binding, id: 3) { [weak self] in self?.panel.selectTap() }
+            guard made.isRegistered else { return false }
+            selectHotkey = made
+        }
+        Settings.selectModeKey = binding
         return true
     }
 
