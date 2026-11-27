@@ -41,9 +41,124 @@ final class Store {
     var focusedThreadId: String? = Store.demo ? nil : UserDefaults.standard.string(forKey: "focusedThreadId") {
         didSet {
             if !Store.demo { UserDefaults.standard.set(focusedThreadId, forKey: "focusedThreadId") }
+            setFocusedAt(Date())
             syncThreadSubscription()
+            // A chat picked here is opened for T3 too. A chat that follows T3 is not sent back.
+            if !followingT3, focusedThreadId != oldValue { reportOpenToT3() }
         }
     }
+    /// When the focused chat was chosen, to compare with chats opened in T3 itself: now for a
+    /// choice in the island, the T3 open time when `focusLastOpened` follows T3.
+    private var focusedAt = UserDefaults.standard.object(forKey: "focusedAt") as? Date ?? .distantPast
+    private func setFocusedAt(_ date: Date) {
+        focusedAt = date
+        if !Store.demo { UserDefaults.standard.set(date, forKey: "focusedAt") }
+    }
+
+    /// The chat opened most recently in T3 (`opens.openedAt`, epoch ms), if T3 reports it.
+    private var lastOpenedInT3: (id: String, at: Date)? {
+        var best: (id: String, at: Date)?
+        for (id, t) in threads where t["archivedAt"].isNull && t["deletedAt"].isNull {
+            guard case .number(let ms) = t["opens"]["openedAt"] else { continue }
+            let at = Date(timeIntervalSince1970: ms / 1000)
+            if best.map({ at > $0.at }) ?? true { best = (id, at) }
+        }
+        return best
+    }
+
+    /// The focused chat and the chat opened last in T3 are one and the same. This is the T3
+    /// side: the chat opened last in T3 becomes the focused chat, unless a chat was picked in
+    /// the island after that. `reportOpenToT3` is the other side.
+    ///
+    /// Does nothing while the island holds work for the focused chat (`holdsTarget`), so a
+    /// prompt in the making is not sent to another chat. The island calls this again when it
+    /// shows and hides.
+    ///
+    /// T3 moves a chat's `openedAt` at most once in 10 minutes (`THREAD_OPEN_DEDUPE_MS`), and
+    /// sends nothing for an open inside that time. So a switch back to a chat that was opened
+    /// less than 10 minutes before is not seen here.
+    func focusLastOpened() {
+        guard holdsTarget?() != true else { return }
+        guard let opened = lastOpenedInT3, opened.at > focusedAt || targetThreadId == nil,
+              opened.id != focusedThreadId else { return }
+        followingT3 = true
+        focusedThreadId = opened.id
+        followingT3 = false
+        // Following T3 is not a choice made now: a chat opened in T3 later, or found in a
+        // later part of the launch snapshot, must still win.
+        setFocusedAt(opened.at)
+    }
+
+    /// Set by the island: true while it holds a draft, selections, a running select mode, or
+    /// a message that is on its way to T3.
+    var holdsTarget: (() -> Bool)?
+
+    /// True while `focusLastOpened` sets the focused chat.
+    private var followingT3 = false
+    private var openReport: Task<Void, Never>?
+    /// Chats this app reported to T3 as opened, each until shortly after T3 answered, with
+    /// the time the report left.
+    private var ownOpens: [String: Date] = [:]
+
+    /// The island side: tells T3 that the focused chat was opened (`thread.visit` with
+    /// `opened`, as T3 sends when a chat is opened there), so it is T3's last opened chat too.
+    /// The read mark stays where it is. Waits a moment first: ⇥ through the chats in select
+    /// mode reports only the chat it stops on. A failure is silent and is not sent again.
+    private func reportOpenToT3() {
+        openReport?.cancel()
+        guard !Store.demo, let id = focusedThreadId else { return }
+        openReport = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, let self, self.targetThreadId == id, let thread = self.threads[id]
+            else { return }
+            // `visitedAt` is the read mark. Send back the one T3 has, so the chat stays unread
+            // or read as it was. A chat with none gets the mark T3 itself sets on an open.
+            let visitedAt = thread["lastVisitedAt"].string ?? thread["updatedAt"].string
+                ?? Self.visitStamp.string(from: Date())
+            let sent = Date()
+            // T3 records nothing for a chat that it opened less than 10 minutes before, so
+            // such a report brings no open to know as our own. The 30 seconds allow for the
+            // time the report takes.
+            if case .number(let ms) = thread["opens"]["openedAt"],
+               sent.timeIntervalSince1970 * 1000 - ms < 9.5 * 60 * 1000 {
+                self.ownOpens[id] = nil
+            } else {
+                self.ownOpens[id] = sent
+            }
+            // Not part of this task: a later pick cancels the wait above, not a sent report.
+            Task { [weak self] in
+                _ = try? await self?.rpc.call("orchestration.dispatchCommand", [
+                    "type": "thread.visit",
+                    "commandId": .string(UUID().uuidString.lowercased()),
+                    "threadId": .string(id),
+                    "visitedAt": .string(visitedAt),
+                    "opened": true,
+                ])
+                // T3's record of this open comes with the answer.
+                try? await Task.sleep(for: .seconds(2))
+                if self?.ownOpens[id] == sent { self?.ownOpens[id] = nil }
+            }
+        }
+    }
+
+    /// T3 recorded an open of a chat. For an open that this app reported, a chat picked in the
+    /// island since then is still the newer choice. Every other open is followed.
+    private func noticeOpen(id: String, at openedAt: JSON?) {
+        if ownOpens.removeValue(forKey: id) != nil {
+            if id != focusedThreadId, case .number(let ms)? = openedAt {
+                setFocusedAt(max(focusedAt, Date(timeIntervalSince1970: ms / 1000)))
+            }
+            return
+        }
+        focusLastOpened()
+    }
+
+    /// T3's `IsoDateTime`, with milliseconds like JavaScript's `toISOString`.
+    nonisolated(unsafe) private static let visitStamp: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 
     // MARK: - Demo mode (`T3Notch --demo`, see Demo.swift)
 
@@ -218,11 +333,15 @@ final class Store {
             // subscription started, and removals arrive as thread.removed events.
             for t in ts { if let id = t["id"].string { threads[id] = t } }
             for p in ps { if let id = p["id"].string { projects[id] = p } }
+            // Select mode can start before the chats load (just after launch).
+            focusLastOpened()
         case "thread.updated":
             guard let t = item["thread"].object, let id = t["id"]?.string else { return }
             let old = threads[id]
             if item["location"].string == "active" { threads[id] = .object(t) } else { threads[id] = nil }
             noticeTransition(id: id, old: old, new: threads[id])
+            let openedAt = threads[id]?["opens"]["openedAt"]
+            if openedAt != old?["opens"]["openedAt"] { noticeOpen(id: id, at: openedAt) }
         case "thread.removed":
             if let id = item["threadId"].string { threads[id] = nil }
         case "project.updated":
@@ -243,6 +362,20 @@ final class Store {
         guard let id = focusedThreadId, let t = threads[id], t["archivedAt"].isNull, t["deletedAt"].isNull
         else { return nil }
         return id
+    }
+
+    /// Moves the focused chat one row down (+1) or up (−1) in the sidebar order, wrapping.
+    /// Select mode's ⇥ uses it to pick where the selection goes.
+    func cycleTarget(_ step: Int) {
+        let ids = sidebarThreads.compactMap { $0["id"].string }
+        guard !ids.isEmpty else { return }
+        let now = targetThreadId.flatMap { ids.firstIndex(of: $0) } ?? (step > 0 ? -1 : 0)
+        focusedThreadId = ids[((now + step) % ids.count + ids.count) % ids.count]
+    }
+
+    /// The focused chat's title, for select mode's destination label.
+    var targetTitle: String? {
+        targetThreadId.flatMap { threads[$0]?["title"].string }
     }
 
     /// Mirrors T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`):
@@ -538,9 +671,9 @@ final class Store {
     /// Sends a prompt. ⏎ queues it after the running turn; ⌘⏎ steers the running turn.
     /// Steer mirrors T3's own UI (`packages/client-runtime/src/operations/commands.ts`):
     /// `start_immediately` with `deliveryIntent: "steer"`, which starts normally when idle.
-    func send(_ text: String, steer: Bool = false, images: [Data] = []) async {
+    func send(_ text: String, steer: Bool = false, clips: [Clip] = []) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty else { return }
+        guard !trimmed.isEmpty || !clips.isEmpty else { return }
         guard let threadId = targetThreadId else {
             lastSendError = threads.isEmpty
                 ? "No threads loaded from T3 yet. Reconnecting…"
@@ -549,7 +682,7 @@ final class Store {
             return
         }
         if Store.demo {
-            onDemoSend?(trimmed, steer, images.count)
+            onDemoSend?(trimmed, steer, clips.count)
             return
         }
         let id = UUID().uuidString.lowercased()
@@ -570,8 +703,10 @@ final class Store {
             command["deliveryIntent"] = "steer"
         }
         do {
-            if !images.isEmpty {
-                command["attachments"] = try await uploadImages(images, threadId: threadId, messageId: id)
+            if !clips.isEmpty {
+                let upload = Self.clipUploads(clips)
+                command["attachments"] = try await uploadImages(upload.images, threadId: threadId, messageId: id)
+                if let block = upload.prompt { command["text"] = .string(trimmed.isEmpty ? block : trimmed + "\n\n" + block) }
             }
             _ = try await rpc.call("orchestration.dispatchCommand", .object(command))
             awaitingThreadId = threadId
@@ -583,16 +718,68 @@ final class Store {
 
     /// Stores PNGs with T3 (`assets.persistChatAttachments`, base64 data URLs) and returns
     /// the attachment records `message.dispatch` takes.
-    private func uploadImages(_ images: [Data], threadId: String, messageId: String) async throws -> JSON {
-        let uploads: [JSON] = images.enumerated().map { i, png in
-            [
-                "type": "image",
-                "name": .string("clip-\(i + 1).png"),
-                "mimeType": "image/png",
-                "sizeBytes": .number(Double(png.count)),
-                "dataUrl": .string("data:image/png;base64," + png.base64EncodedString()),
-            ]
+    /// Each clip as images plus its entry in the `<selected-ui>` block: the window with the
+    /// clip outlined (carrying the app data as T3's `source`) and the close-up. A clip with no
+    /// context sends its close-up alone. Close-ups go first when T3's limits would be passed.
+    static func clipUploads(_ clips: [Clip]) -> (images: [JSON], prompt: String?) {
+        var images: [JSON] = []
+        var entries: [JSON] = []
+        func image(_ name: String, _ png: Data, source: JSON? = nil) -> JSON {
+            var o: [String: JSON] = ["type": "image", "name": .string(name), "mimeType": "image/png",
+                                     "sizeBytes": .number(Double(png.count)),
+                                     "dataUrl": .string("data:image/png;base64," + png.base64EncodedString())]
+            if let source { o["source"] = source }
+            return .object(o)
         }
+        guard let plan = clipPlan(clips) else { return ([], nil) }
+        for (i, (clip, p)) in zip(clips, plan).enumerated() {
+            let n = i + 1
+            guard let ctx = clip.context else {
+                images.append(image("selection-\(n).png", clip.png))
+                continue
+            }
+            var windowName: String?, detailName: String?
+            if p.window, let window = ctx.windowPNG {
+                windowName = "selection-\(n)-window.png"
+                images.append(image(windowName!, window, source: ctx.source()))
+            }
+            if p.detail {
+                detailName = "selection-\(n)-detail.png"
+                images.append(image(detailName!, clip.png))
+            }
+            entries.append(ctx.promptEntry(index: n, windowImage: windowName, detailImage: detailName))
+        }
+        return (images, PickContext.promptBlock(entries))
+    }
+
+    /// T3's limits for one message: 100 images and 80 MiB.
+    static let maxClipBytes = 80 * 1024 * 1024, maxClipImages = 100
+
+    /// Which images each clip sends within T3's limits: first one image per clip (the
+    /// window, or the close-up when that is all there is or the window does not fit), then
+    /// close-ups while they fit. Nil when even one image per clip is too much.
+    static func clipPlan(_ clips: [Clip]) -> [(window: Bool, detail: Bool)]? {
+        guard clips.count <= maxClipImages else { return nil }
+        var plan = clips.map { c in (window: c.context?.windowPNG != nil, detail: c.context?.windowPNG == nil) }
+        func size(_ i: Int) -> Int { plan[i].window ? clips[i].context!.windowPNG!.count : clips[i].png.count }
+        var bytes = clips.indices.reduce(0) { $0 + size($1) }
+        // Over budget: send the smaller image for the clips with the biggest windows.
+        for i in clips.indices.sorted(by: { size($0) > size($1) }) where bytes > maxClipBytes && plan[i].window {
+            let window = clips[i].context!.windowPNG!.count, detail = clips[i].png.count
+            if detail < window { plan[i] = (false, true); bytes -= window - detail }
+        }
+        guard bytes <= maxClipBytes else { return nil }
+        var count = clips.count
+        for i in clips.indices where plan[i].window && !plan[i].detail && !clips[i].context!.detailIsRedundant {
+            guard count < maxClipImages, bytes + clips[i].png.count <= maxClipBytes else { continue }
+            plan[i].detail = true
+            bytes += clips[i].png.count
+            count += 1
+        }
+        return plan
+    }
+
+    private func uploadImages(_ uploads: [JSON], threadId: String, messageId: String) async throws -> JSON {
         let result = try await rpc.call("assets.persistChatAttachments", [
             "threadId": .string(threadId), "messageId": .string(messageId), "attachments": .array(uploads),
         ])
@@ -740,6 +927,12 @@ enum Settings {
     static var expandOnHover: Bool {
         get { UserDefaults.standard.object(forKey: "expandOnHover") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "expandOnHover") }
+    }
+
+    /// A tap of ⌃⌥ from any app starts select mode. On by default.
+    static var controlOptionSelect: Bool {
+        get { UserDefaults.standard.object(forKey: "controlOptionSelect") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "controlOptionSelect") }
     }
 
     /// Pop the island open when the focused chat's run ends. On by default.

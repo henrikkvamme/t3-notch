@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var hotkey: Hotkey!
     private var dotHotkey: Hotkey!
+    private var selectTrigger: SelectTrigger!
     private var settings: SettingsController!
     private var statusDot: StatusDotController!
     private var demo: DemoController?
@@ -18,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey = Hotkey(Settings.showIslandKey, id: 1) { [weak self] in self?.panel.toggle() }
         // Hides or shows the status dot, e.g. while watching a film.
         dotHotkey = Hotkey(Settings.toggleDotKey, id: 2) { [weak self] in self?.toggleDot() }
+        selectTrigger = SelectTrigger { [weak self] in self?.panel.startSelecting() }
+        BrowserBridge.shared.start()
         store.onAttentionNeeded = { [weak self] reason in
             guard let self, self.panel.mode == .hidden else { return }
             // T3 Code is in view on some display: it shows the reply and the request itself.
