@@ -25,7 +25,6 @@ app: build
 		-c "Set :CFBundleName $(DEV_NAME)" -c "Set :CFBundleDisplayName $(DEV_NAME)" "$(APP)/Contents/Info.plist"
 	mkdir -p "$(APP)/Contents/Resources"
 	cp Resources/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
-	cp -R Extension "$(APP)/Contents/Resources/Extension"
 	codesign --force --sign "$(or $(SIGN_ID),-)" "$(APP)"
 
 # Quits only the dev copy (matched by its path), never the release one.

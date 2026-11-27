@@ -87,8 +87,6 @@ final class RPCClient {
 
     /// A unary request; returns the success value of its `Exit`.
     func call(_ tag: String, _ payload: JSON) async throws -> JSON {
-        // Without a socket the frame is not sent and no answer can end the call.
-        guard task != nil else { throw AppError.rpc("not connected to T3") }
         let id = makeId()
         return try await withCheckedThrowingContinuation { cont in
             calls[id] = cont

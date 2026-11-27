@@ -49,20 +49,11 @@ github.com/pingdotgg/t3code. Their backpressure rule is in `apps/server/src/term
   - `message.dispatch`: `{commandId, threadId, messageId, text, attachments: [], dispatchMode: {type: "queue_after_active"}, createdBy: "user", creationSource: "web"}`.
   - `runtime-request.respond`: `{commandId, threadId, requestId, decision}` for an approval. For a user-input question, send `answers` (by question id) in place of `decision`.
   - `run.interrupt`: `{commandId, threadId, runId}`.
-  - `thread.visit`: `{commandId, threadId, visitedAt, opened: true}`. T3 sends it when a chat is opened;
-    the overlay sends it when a chat is picked in the island. The server sets `opens.openedAt` (its own
-    clock, at most once in 10 minutes for a chat) and moves the read mark to `visitedAt` when that is
-    later. The overlay sends the chat's own `lastVisitedAt`, so the read mark stays.
 
 ### Which thread is the target
 
 The chat picked in the ⌘K list (`Store.focusedThreadId`, kept in UserDefaults). There is no default;
-with none, or once it is archived or deleted, opening the island shows the list. It is also the chat
-opened last in T3: a chat opened in T3 becomes the target (`Store.focusLastOpened`, from
-`opens.openedAt`), and a chat picked in the island is reported to T3 as opened (`thread.visit`). Two
-limits: the target stays while the island holds a draft, selections, a running select mode or a
-message on its way, and T3
-does not record an open of a chat that it opened less than 10 minutes before, in either direction. The list follows
+with none, or once it is archived or deleted, opening the island shows the list. The list follows
 T3's sidebar order (`packages/client-runtime/src/state/threadSort.ts`): pinned by `pinOrderKey`, then
 active by `activeOrderKey`, then settled or snoozed ones by latest activity. Rows mirror
 `apps/web/src/components/sidebar/SidebarThreadRow.tsx` (`ThreadRow.swift`).

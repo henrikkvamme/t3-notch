@@ -119,12 +119,6 @@ final class PanelController {
                 if self.ui.mode == .peek { self.expand() }
             }
         }
-        // A draft, selections, a running select mode and a message on its way belong to the
-        // focused chat.
-        store.holdsTarget = { [weak self] in
-            guard let self else { return false }
-            return !self.ui.draft.isEmpty || !self.ui.clips.isEmpty || self.clipper != nil || self.ui.sending > 0
-        }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
@@ -139,8 +133,6 @@ final class PanelController {
 
     func expand() {
         peekHideTask?.cancel()
-        // A chat opened in T3 while the island held work for another chat.
-        store.focusLastOpened()
         store.markReplySeen()
         let wasHidden = ui.mode == .hidden
         if wasHidden { place(on: NotchGeometry.screenUnderMouse()) }
@@ -211,7 +203,6 @@ final class PanelController {
             ui.pickerOpen = false
         }
         panel.ignoresMouseEvents = true
-        store.focusLastOpened() // as in `expand`
         // Take the canvas away once the island has shrunk into the notch.
         orderOutTask?.cancel()
         orderOutTask = Task { [weak self] in
@@ -421,20 +412,10 @@ final class PanelController {
 
     func sendDraft(steer: Bool) {
         let text = ui.draft
-        let clips = ui.clips
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
-        // Keep the draft when the selections cannot go in one message.
-        guard Store.clipPlan(clips) != nil else {
-            store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
-            return
-        }
+        let images = ui.clips.map(\.png)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        ui.sending += 1
-        Task {
-            await store.send(text, steer: steer, clips: clips)
-            ui.sending -= 1
-            store.focusLastOpened()
-        }
+        Task { await store.send(text, steer: steer, images: images) }
         hide() // sent: tuck the island away and hand focus back
     }
 
@@ -466,42 +447,6 @@ final class PanelController {
             self.ui.clips += clips
             self.expand()
             self.showMissingPermissions()
-        }
-    }
-
-    /// A tap of ⌃⌥ from any app: select what is under the pointer without opening the island
-    /// first. Picks go to the focused chat and open the island; Esc with no picks leaves
-    /// everything as it was.
-    func startSelecting() {
-        guard clipper == nil else { return }
-        guard Permission.screenRecording.isGranted, Permission.accessibility.isGranted else {
-            expand()
-            showMissingPermissions()
-            return
-        }
-        store.focusLastOpened()
-        let wasPeeking = ui.mode == .peek
-        let wasExpanded = ui.mode == .expanded
-        // Before the clipper makes T3 Notch active: the island hands focus back to this app.
-        rememberFrontApp()
-        orderOutTask?.cancel()
-        ui.mode = .hidden
-        ui.pickerOpen = false
-        panel.ignoresMouseEvents = true
-        panel.orderOut(nil)
-        let destination = ClipController.Destination(
-            title: { [weak self] in self?.store.targetTitle },
-            cycle: { [weak self] step in self?.store.cycleTarget(step) })
-        clipper = ClipController.start(depth: ui.clipDepth, destination: destination) { [weak self] clips, depth in
-            guard let self else { return }
-            self.clipper = nil
-            self.ui.clipDepth = depth
-            if clips.isEmpty {
-                if wasExpanded { self.expand() } else if wasPeeking { self.peek(autoHide: true) }
-                return
-            }
-            self.ui.clips += clips
-            self.expand()
         }
     }
 

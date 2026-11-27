@@ -16,9 +16,6 @@ final class OverlayUIState {
     var pickerRowFrames: [Int: CGRect] = [:]
     var hovering = false
     var draft = ""
-    /// Messages on their way to T3. They left the draft, but the focused chat must stay until
-    /// each one has its chat (see `Store.holdsTarget`).
-    var sending = 0
     /// Screen clips waiting to go with the next message.
     var clips: [Clip] = []
     /// Removed clips, newest last, with their old position, for ⌘Z / ⌃Z.
@@ -381,20 +378,10 @@ struct OverlayView: View {
 
     private func sendDraft() {
         let text = ui.draft
-        let clips = ui.clips
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
-        // Keep the draft when the selections cannot go in one message.
-        guard Store.clipPlan(clips) != nil else {
-            store.lastSendError = "Too many or too large selections for one message. Remove some and send again."
-            return
-        }
+        let images = ui.clips.map(\.png)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { return }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        ui.sending += 1
-        Task {
-            await store.send(text, clips: clips)
-            ui.sending -= 1
-            store.focusLastOpened()
-        }
+        Task { await store.send(text, images: images) }
         ui.onClose?() // sent: tuck the island away and hand focus back
     }
 
