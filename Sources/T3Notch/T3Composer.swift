@@ -21,15 +21,32 @@ final class T3Composer: @unchecked Sendable {
 
     /// Replaces the field's text. `done` gets the text as the field has it afterwards (its
     /// editor may write line breaks its own way), or nil when T3 did not take it.
-    func write(_ text: String, pid: pid_t, chatTitle: String, _ done: @escaping @MainActor (String?) -> Void = { _ in }) {
+    func write(_ text: String, caret: Int? = nil, pid: pid_t, chatTitle: String, _ done: @escaping @MainActor (String?) -> Void = { _ in }) {
         queue.async {
             var now: String?
             if let field = self.field(pid: pid, chatTitle: chatTitle),
                AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, text as CFString) == .success {
                 now = Self.string(field, kAXValueAttribute)
+                Self.place(caret: caret, in: field, length: (now ?? text).utf16.count)
             }
             DispatchQueue.main.async { MainActor.assumeIsolated { done(now) } }
         }
+    }
+
+    /// Puts the caret of T3's field where the island has it, without a change of the text.
+    func place(caret: Int?, pid: pid_t, chatTitle: String) {
+        queue.async {
+            guard let field = self.field(pid: pid, chatTitle: chatTitle),
+                  let text = Self.string(field, kAXValueAttribute) else { return }
+            Self.place(caret: caret, in: field, length: text.utf16.count)
+        }
+    }
+
+    /// The caret goes to the island's place, or to the end of the text.
+    private static func place(caret: Int?, in field: AXUIElement, length: Int) {
+        var range = CFRange(location: min(max(caret ?? length, 0), length), length: 0)
+        guard let value = AXValueCreate(.cfRange, &range) else { return }
+        AXUIElementSetAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, value)
     }
 
     /// The message field of the chat with this title. A field for another chat is not it: a

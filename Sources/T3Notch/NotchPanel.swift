@@ -510,10 +510,11 @@ final class PanelController {
         guard !mine.isEmpty else { return }
         // T3 has it already: no write, which would move the cursor in T3's field.
         if let synced, Self.sameDraft(mine, synced) {
+            composer.place(caret: ui.draftCaret, pid: target.pid, chatTitle: target.title)
             ui.draft = ""
             return
         }
-        composer.write(mine, pid: target.pid, chatTitle: target.title) { [weak self] now in
+        composer.write(mine, caret: ui.draftCaret, pid: target.pid, chatTitle: target.title) { [weak self] now in
             guard let self, let now, Self.sameDraft(now, mine), self.ui.mode != .expanded, self.ui.draft == mine else { return }
             self.ui.draft = ""
             self.store.focusLastOpened()
@@ -547,7 +548,7 @@ final class PanelController {
                     }
                     return
                 }
-                self.composer.write(mine, pid: target.pid, chatTitle: target.title) { [weak self] now in
+                self.composer.write(mine, caret: self.ui.draftCaret, pid: target.pid, chatTitle: target.title) { [weak self] now in
                     guard let self else { return }
                     self.draftSyncBusy = false
                     // The answer is for the chat it was written to, not for the one shown now.

@@ -10,6 +10,8 @@ final class OverlayUIState {
     var pickerOpen = false
     var pickerQuery = ""
     var pickerIndex = 0
+    /// Where the caret is in the draft's text (UTF-16), so T3's field can show it there too.
+    @ObservationIgnored var draftCaret: Int?
     /// How many rows the picker shows after filtering, so key navigation stays in range.
     var pickerCount = 0
     /// Each picker row's frame, so the selection highlight can slide between them.

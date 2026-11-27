@@ -76,8 +76,9 @@ private struct PickerHighlight: View {
             if let f = ui.pickerRowFrames[ui.pickerIndex] {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(.white.opacity(0.12))
-                    .frame(width: f.width, height: f.height)
-                    .offset(x: f.minX, y: f.minY)
+                    // As wide as the list, whatever width the row had when it was measured.
+                    .frame(maxWidth: .infinity).frame(height: f.height)
+                    .offset(y: f.minY)
                     .animation(Motion.select, value: f)
             }
         }

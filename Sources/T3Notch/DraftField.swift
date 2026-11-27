@@ -242,6 +242,11 @@ struct DraftField: NSViewRepresentable {
 
         // MARK: You changed the field
 
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !applying, let text else { return }
+            parent.ui.draftCaret = plainOffset(of: text.selectedRange().location)
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !applying, let text, let storage = text.textStorage else { return }
             // A pasted object character with no chip behind it is not text.
@@ -327,6 +332,13 @@ final class DraftTextView: NSTextView {
     override func paste(_ sender: Any?) {
         let clips = Self.pictures(on: .general)
         if clips.isEmpty { super.paste(sender) } else { onPictures?(clips) }
+    }
+
+    /// A picture alone on the clipboard can be pasted too: a plain text field says no to it.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable,
+           NSPasteboard.general.availableType(from: [.png, .tiff, .fileURL]) != nil { return true }
+        return super.validateUserInterfaceItem(item)
     }
 
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
