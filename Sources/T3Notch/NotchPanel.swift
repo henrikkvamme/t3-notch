@@ -945,9 +945,11 @@ final class PanelController {
                     peek(autoHide: false)
                 }
             }
-            store.focusLastOpened()
+            // The open island stays on the chat you wrote to.
+            if ui.mode != .expanded { store.focusLastOpened() }
         }
-        hide() // sent: tuck the island away and hand focus back
+        // The island stays open: you see your message and the answer come in, and can write on.
+        focusTextField()
     }
 
     private func retrySend() {

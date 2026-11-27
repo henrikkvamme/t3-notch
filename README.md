@@ -17,7 +17,7 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 ## Features
 
 - **Prompt from anywhere.** ⌥Space opens the island over any app, fullscreen ones included. The input appears
-  when you start typing. Sending hides the island and hands focus back to the app you were in.
+  when you start typing. After you send, the island stays open on the chat; Esc or a click elsewhere closes it.
 - **Live replies.** While the agent works, the island shows its thinking (and, with **Show Commands While
   Working** on in settings, its current step: `$ swift test`, `Editing Store.swift`). Then the reply streams in, sliding the old one out as it blurs in.
   Images the agent puts in its reply (screenshots, charts) show in place; click one to open it.
