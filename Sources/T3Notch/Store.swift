@@ -91,12 +91,13 @@ final class Store {
     func markReplySeen() { unseenReply = false }
 
     /// The status shown by the dot next to the notch while the overlay is hidden.
-    enum Indicator: Equatable { case hidden, idle, running, needsYou, failed, done }
+    enum Indicator: Equatable { case hidden, idle, running, awaitingInput, needsYou, failed, done }
 
     var indicator: Indicator {
         // Always at least a grey dot, so the overlay can be opened with the mouse.
         guard connection == .connected, targetThread != nil else { return protocolBreak != nil ? .needsYou : .idle }
-        if pendingRequest != nil || protocolBreak != nil { return .needsYou }
+        if let request = pendingRequest { return request.kind == "user_input" ? .awaitingInput : .needsYou }
+        if protocolBreak != nil { return .needsYou }
         if isTargetActive { return .running }
         if targetStatus == "failed" { return .failed }
         if unseenReply { return .done }
