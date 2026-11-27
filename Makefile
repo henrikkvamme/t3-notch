@@ -26,6 +26,8 @@ app: build
 	mkdir -p "$(APP)/Contents/Resources"
 	cp Resources/AppIcon.icns "$(APP)/Contents/Resources/AppIcon.icns"
 	cp -R Extension "$(APP)/Contents/Resources/Extension"
+	@if [ -z "$(SIGN_ID)" ]; then echo "warning: no Apple Development certificate, so the app is signed ad-hoc." \
+		"macOS drops its Screen Recording and Accessibility grants after each build; grant them again from the island." >&2; fi
 	codesign --force --sign "$(or $(SIGN_ID),-)" "$(APP)"
 
 # Quits only the dev copy (matched by its path), never the release one.

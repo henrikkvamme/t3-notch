@@ -79,17 +79,24 @@ final class PanelController {
 
     let panel = NotchPanel()
     let ui: OverlayUIState
-    private let store: Store
+    let store: Store
     private var geometry: NotchGeometry
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var localKeyMonitor: Any?
+    private var heldKeyMonitor: Any?
     private var peekHideTask: Task<Void, Never>?
     private var orderOutTask: Task<Void, Never>?
     /// Reads the pointer while the island is open. Mouse-moved events are not enough: AppKit
     /// does not send them to a panel that is not key in an app that is not active, so a
     /// pointer that leaves the island over the panel's transparent canvas can go unseen.
     private var mouseTimer: Timer?
+    /// What the current tour step waits for (see Onboarding.swift).
+    var onboardingTask: Task<Void, Never>?
+    /// The Hotkey step: the shortcut has folded the island once.
+    var onboardingHidOnce = false
+    /// How many successes the tour has had; each plays the next note up.
+    var onboardingNote = 0
 
     init(store: Store) {
         self.store = store
@@ -97,10 +104,12 @@ final class PanelController {
         self.ui = OverlayUIState()
         ui.onClose = { [weak self] in self?.hide() }
         ui.onOpenInT3 = { [weak self] in self?.openInT3() }
-        ui.onOpenPermission = { permission in permission.openSettings() }
+        ui.onOpenPermission = { [weak self] permission in self?.grantPermissions(startingWith: permission) }
         ui.onRequestFocus = { [weak self] in self?.focusTextField() }
         ui.onTypingChange = { [weak self] _ in self?.updateCursor() }
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
+        ui.onOnboardingStep = { [weak self] step in self?.go(to: step) }
+        ui.onOnboardingPickerClosed = { [weak self] in self?.onboardingPickerClosed() }
         let host = FirstClickHostingView(rootView: OverlayView(store: store, ui: ui))
         host.sizingOptions = []
         panel.contentView = host
@@ -123,6 +132,11 @@ final class PanelController {
                 if self.ui.mode == .peek { self.expand() }
             }
         }
+        // The tour's keycaps go down while you hold their keys.
+        heldKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyUp]) { [weak self] event in
+            MainActor.assumeIsolated { self?.trackHeldKeys(event) }
+            return event
+        }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
@@ -132,6 +146,7 @@ final class PanelController {
     var mode: Mode { ui.mode }
 
     func toggle() {
+        if ui.onboarding == .hotkey { onboardingHotkeyPressed(); return }
         ui.mode == .expanded ? hide() : expand()
     }
 
@@ -145,7 +160,7 @@ final class PanelController {
         panel.makeKey()
         animateMode(.expanded, afterLayout: wasHidden)
         // No chat focused: open straight onto the list of chats.
-        if store.targetThreadId == nil && store.connection == .connected && !ui.pickerOpen {
+        if store.targetThreadId == nil && store.connection == .connected && !ui.pickerOpen && ui.onboarding == nil {
             setPicker(true)
         } else {
             focusTextField()
@@ -181,7 +196,7 @@ final class PanelController {
         hide(returnFocus: false)
         // With clips, the text is pasted after them (see Handoff); without, the link carries it.
         let pid = store.runtime?.app?.processIdentifier
-        let pasteText = !clips.isEmpty && pid != nil && AXIsProcessTrusted()
+        let pasteText = !clips.isEmpty && pid != nil && Permission.accessibility.isGranted
         store.openTargetInT3(prompt: text.isEmpty || pasteText ? nil : text)
         guard !text.isEmpty || !clips.isEmpty, store.targetThreadId != nil else { return }
         ui.draft = ""
@@ -361,6 +376,7 @@ final class PanelController {
 
     /// Overlay shortcuts. Returns true when the key was handled.
     private func handleKey(_ event: NSEvent) -> Bool {
+        if handleOnboardingKey(event) { return true }
         if let step = Self.vimStep(event) {
             if ui.pickerOpen { movePicker(by: step) } else { scrollReply(by: step) }
             return true
@@ -522,6 +538,10 @@ final class PanelController {
 
     private var clipWhenAllowed = false
     private var permissionTimer: Timer?
+    private let permissionGuide = PermissionGuide()
+
+    /// Walks through granting `first` and any other missing permission.
+    func grantPermissions(startingWith first: Permission) { permissionGuide.start(first) }
 
     /// Shows a button per missing permission and watches for grants while any are missing.
     private func showMissingPermissions() {

@@ -726,7 +726,7 @@ final class ElementProbe: @unchecked Sendable {
     private func chainAt(_ p: CGPoint) -> ProbeResult {
         guard let (pid, windowID, window) = windowAt(p) else { return ProbeResult() }
         let result = ProbeResult(pid: pid, windowID: windowID, window: window, frames: [window], elements: [nil], labels: [nil])
-        guard AXIsProcessTrusted() else { return result }
+        guard Permission.accessibility.isGranted else { return result }
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.08)
         if !manualAccessibilityPids.contains(pid) {
@@ -844,7 +844,7 @@ final class ElementProbe: @unchecked Sendable {
     /// Text selected in the app in front, as a probe whose first frame is the selection's
     /// bounds. Nil when nothing is selected, the bounds are unknown, or it is a password.
     private static func selectionNow() -> ProbeResult? {
-        guard AXIsProcessTrusted(), let front = NSWorkspace.shared.frontmostApplication else { return nil }
+        guard Permission.accessibility.isGranted, let front = NSWorkspace.shared.frontmostApplication else { return nil }
         let app = AXUIElementCreateApplication(front.processIdentifier)
         AXUIElementSetMessagingTimeout(app, 0.1)
         var focused: CFTypeRef?, range: CFTypeRef?, bounds: CFTypeRef?

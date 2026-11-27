@@ -62,6 +62,19 @@ final class OverlayUIState {
     /// Typing started or stopped; the controller shows or hides the text cursor.
     var onTypingChange: ((Bool) -> Void)?
     var onIslandFrameChange: (() -> Void)?
+
+    /// The welcome tour's step while it shows, else nil.
+    var onboarding: OnboardingStep?
+    /// The tour's keycaps glow: the shortcut was just pressed.
+    var onboardingKeysLit = false
+    /// Keys held down right now, by keycap symbol, so the tour's keycaps go down with them.
+    var onboardingHeld: Set<String> = []
+    /// The keys card's shortcuts tried so far.
+    var onboardingTried: Set<OnboardingTip> = []
+    /// Counts the tour's successes; each change plays the success moment.
+    var onboardingSuccess = 0
+    var onOnboardingStep: ((OnboardingStep) -> Void)?
+    var onOnboardingPickerClosed: (() -> Void)?
 }
 
 /// The island: a black shape that grows out of the notch, with glass controls inside.
@@ -102,6 +115,8 @@ struct OverlayView: View {
                                               bottomTrailingRadius: shown ? 26 : notchRadius,
                                               style: .continuous))
             .shadow(color: .black.opacity(shown ? 0.45 : 0), radius: shown ? 24 : 0, y: shown ? 10 : 0)
+            // The tour's successes stretch the island a little and let it spring back.
+            .modifier(IslandBreath(trigger: ui.onboardingSuccess, big: ui.onboarding == .done))
             // A drawn notch on screens without one fades rather than sitting there black.
             .opacity(shown || ui.hasRealNotch ? 1 : 0)
             .animation(Motion.content, value: layoutKey)
@@ -115,7 +130,8 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip]
+         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, hoveredClip,
+         ui.onboarding, ui.onboardingKeysLit, ui.onboardingTried]
     }
 
     private var content: some View {
@@ -125,11 +141,18 @@ struct OverlayView: View {
                 if let b = store.protocolBreak {
                     protocolBanner(b).transition(.blurReplace.combined(with: .move(edge: .top)))
                 }
-                if store.connection != .connected {
+                if let step = ui.onboarding, !(step == .chats && ui.pickerOpen && store.connection == .connected) {
+                    OnboardingView(store: store, ui: ui, step: step) { ui.onOnboardingStep?($0) }
+                        .transition(.blurReplace)
+                } else if store.connection != .connected {
                     connectionLine.transition(.blurReplace)
                 } else {
                     header
                     if ui.pickerOpen && ui.mode == .expanded {
+                        if ui.onboarding == .chats {
+                            Text("Move with ↑ and ↓, pick with ⏎.").font(.callout).foregroundStyle(.secondary)
+                                .transition(.blurReplace)
+                        }
                         picker.transition(.blurReplace)
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
@@ -164,6 +187,9 @@ struct OverlayView: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 14)
+        }
+        .onChange(of: ui.pickerOpen) { was, open in
+            if was && !open { ui.onOnboardingPickerClosed?() }
         }
     }
 
