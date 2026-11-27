@@ -12,6 +12,8 @@ import Carbon.HIToolbox
 final class SelectTrigger {
     /// How long both keys must stay down before select mode shows.
     static let delay: TimeInterval = 0.15
+    /// The keys of the hold, as the welcome tour draws them. Change them with `flagsChanged`.
+    static let keycaps = [KeyCap(symbol: "⌃", name: "control"), KeyCap(symbol: "⌥", name: "option")]
 
     private let onHold: (Bool) -> Void
     private var monitors: [Any] = []

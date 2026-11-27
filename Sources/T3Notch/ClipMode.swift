@@ -88,9 +88,13 @@ final class ClipController {
         /// ⇥ and ⇧⇥: the next or previous chat.
         let cycle: (Int) -> Void
         let onEnd: (SelectEnd) -> Void
+        /// A scroll changed the level while ⌃⌥ was held. The welcome tour follows it.
+        var onScroll: () -> Void = {}
     }
 
     enum SelectEnd {
+        var isRelease: Bool { if case .released = self { true } else { false } }
+
         /// The hold ended before a click: ⌃⌥ let go, or something else was pressed.
         case released
         /// Esc, or another app took the keyboard.
@@ -531,6 +535,7 @@ final class ClipController {
             return true
         case .scrollWheel:
             if state.preset != nil { _ = leavePreset() } else if let e = NSEvent(cgEvent: event) { state.scroll(e) }
+            select?.onScroll()
             return true
         default:
             return false

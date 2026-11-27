@@ -219,6 +219,7 @@ final class PanelController {
     /// anyway (opening the thread in T3), so the two activations don't fight.
     func hide(returnFocus shouldReturn: Bool = true) {
         peekHideTask?.cancel()
+        onboardingSelectHidden(selecting: clipper != nil)
         if shouldReturn { returnFocus() } else { panel.resignKey() }
         withAnimation(Motion.close) {
             ui.mode = .hidden
@@ -507,6 +508,12 @@ final class PanelController {
             return
         }
         guard clipper == nil else { return }
+        // The tour's Select step, with the island in view: the hold is the lesson.
+        let inTour = ui.onboarding == .select && ui.mode == .expanded
+        if inTour, !Onboarding.canSelect {
+            onboardingSelectHeld(started: false)
+            return
+        }
         guard Permission.accessibility.isGranted else {
             expand()
             showMissingPermissions()
@@ -514,16 +521,20 @@ final class PanelController {
         }
         store.focusLastOpened()
         let islandHadKeys = panel.isKeyWindow
-        let select = ClipController.Select(
+        var select = ClipController.Select(
             title: { [weak self] in self?.store.targetTitle },
             target: { [weak self] in self?.store.targetThreadId },
             cycle: { [weak self] step in self?.store.cycleTarget(step) },
-            onEnd: { [weak self] end in self?.selectEnded(end, islandHadKeys: islandHadKeys) })
+            onEnd: { [weak self] end in self?.selectEnded(end, islandHadKeys: islandHadKeys, inTour: inTour) })
+        if inTour { select.onScroll = { [weak self] in self?.onboardingSelectScrolled() } }
         clipper = ClipController.startSelecting(select)
+        if inTour { onboardingSelectHeld(started: clipper != nil) }
     }
 
-    private func selectEnded(_ end: ClipController.SelectEnd, islandHadKeys: Bool) {
+    private func selectEnded(_ end: ClipController.SelectEnd, islandHadKeys: Bool, inTour: Bool) {
         clipper = nil
+        // The tour moves on after a click, and asks again after a hold without one.
+        defer { if inTour { onboardingSelectEnded(clicked: !end.isRelease) } }
         switch end {
         case .released:
             return // the hold trigger knows: it reported the end, or gets the same key event
@@ -537,8 +548,10 @@ final class PanelController {
                 element=\(clip.context?.element?.role ?? "none", privacy: .public) \
                 page=\(clip.context?.page != nil, privacy: .public) comment=\(comment.count, privacy: .public)
                 """)
-            // No chat to send to: the island takes them and opens on the list of chats.
-            guard !selectSendsNothing, let to, Store.clipPlan([clip]) != nil else {
+            // No chat to send to: the island takes them and opens on the list of chats. The
+            // tour sends nothing either: a first try must not start an agent.
+            // That holds for the whole Select step, also with the island folded away.
+            guard !selectSendsNothing, ui.onboarding != .select, let to, Store.clipPlan([clip]) != nil else {
                 keep(clip, comment)
                 return
             }

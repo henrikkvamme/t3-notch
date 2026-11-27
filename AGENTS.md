@@ -21,6 +21,10 @@ self-update. `make install` quits and replaces only the dev copy.
 - `Sources/T3Notch/Onboarding.swift`: the welcome tour, in the island. Real key presses drive it. A step's
   success is one moment: the keys bottom out and spring back, light spreads from the last key, the island
   stretches, and a note and a trackpad tap land with it. Check a step with `--onboarding [step]`.
+  Its Select step runs the real select mode while ⌃⌥ is held: the hold lights the keys, a scroll and a click
+  move its words on, and the step ends when the comment field closes. There ⏎ sends nothing; the selection
+  and the comment go to the island. It draws the keys from `SelectTrigger.keycaps` and is left out while
+  the hold is off.
 - `Sources/T3Notch/ClipMode.swift`: clip mode (⌘P) and select mode (hold ⌃⌥), the element probe, and the
   overlay that draws both.
 - `Sources/T3Notch/SelectTrigger.swift`: reports while ⌃⌥ is held in any app.
