@@ -1258,7 +1258,28 @@ final class ElementProbe: @unchecked Sendable {
             slowUntil[pid] = error == .cannotComplete ? Date().addingTimeInterval(2) : nil
         }
         guard error == .success, let element = hit else { return result }
-        return withPage(chain(from: element, pid: pid, windowID: windowID, window: window), at: p)
+        return withPage(chain(from: Self.deepest(under: element, at: p), pid: pid, windowID: windowID, window: window), at: p)
+    }
+
+    /// The hit test of an app can stop at a frame that holds another page (a sandboxed frame
+    /// in a Chromium app, a web view in a native app) and not look inside it. This goes on
+    /// down from the hit: at each level, the smallest child that holds the point.
+    private static func deepest(under start: AXUIElement, at p: CGPoint) -> AXUIElement {
+        var element = start
+        for _ in 0..<10 {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+                  let children = value as? [AXUIElement], !children.isEmpty, children.count <= 200 else { break }
+            var best: (AXUIElement, CGFloat)?
+            for child in children {
+                guard let f = frame(of: child), f.contains(p), f.width >= 4, f.height >= 4 else { continue }
+                let area = f.width * f.height
+                if best.map({ area < $0.1 }) ?? true { best = (child, area) }
+            }
+            guard let next = best?.0 else { break }
+            element = next
+        }
+        return element
     }
 
     /// The element and its ancestors up to the window, smallest first, with labels and the
