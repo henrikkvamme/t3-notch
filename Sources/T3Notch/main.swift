@@ -63,15 +63,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // The welcome tour: on first launch, resuming an unfinished one, or with
-        // `--onboarding [welcome|connect|hotkey|chats|select|tips|done]`.
+        // `--onboarding [install|welcome|connect|hotkey|chats|select|tips|done]`. A copy outside
+        // Applications first offers to move there (Install.swift). After the move the new copy
+        // gets `--moved` and goes on with the tour sooner, so the island is back at once.
+        let tourStep = Onboarding.startsAtLaunch ? Onboarding.saved.map { $0 == .done ? .welcome : $0 } : nil
+        let delay: TimeInterval = args.contains("--moved") ? 0.3 : 1
         if let i = args.firstIndex(of: "--onboarding") {
             let step = args.indices.contains(i + 1)
                 ? OnboardingStep.allCases.first { "\($0)" == args[i + 1] } ?? .welcome : .welcome
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.panel.startOnboarding(at: step) }
-        } else if Onboarding.startsAtLaunch, let step = Onboarding.saved {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                self?.panel.startOnboarding(at: step == .done ? .welcome : step)
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.panel.startOnboarding(at: step) }
+        } else if AppLocation.shouldOfferMove {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.panel.offerMove(then: tourStep) }
+        } else if let tourStep {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.panel.startOnboarding(at: tourStep) }
         }
         // `--select` shows select mode at launch as if ⌃⌥ were held, for checking it. It
         // stays until a click and then Esc or ⏎. `--select-dry` sends nothing for as long as

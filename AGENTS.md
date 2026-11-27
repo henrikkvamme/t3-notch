@@ -1,7 +1,7 @@
 # T3 Notch: notes for agents
 
 A Swift Package with no dependencies. The UI is SwiftUI inside an AppKit `NSPanel`. Build it with
-`make app`, or install and run it with `make install`. Both make **T3 Notch Dev** (bundle id
+`make app`, or install and run it with `make install`. Releases ship as a DMG and a zip (RELEASING.md). Both make targets build **T3 Notch Dev** (bundle id
 `dev.t3notch.app.dev`, `BuildInfo.isDev`), which runs beside the release in /Applications and does not
 self-update. `make install` quits and replaces only the dev copy.
 
@@ -25,6 +25,11 @@ self-update. `make install` quits and replaces only the dev copy.
   move its words on, and the step ends when the comment field closes. There ⏎ sends nothing; the selection
   and the comment go to the island. It draws the keys from `SelectTrigger.keycaps` and is left out while
   the hold is off.
+- `Sources/T3Notch/Install.swift`: the move into Applications. A release copy that runs from the DMG, from
+  Downloads or translocated cannot update itself, so at launch the island offers one step: copy the app to
+  Applications, clear its quarantine flag, relaunch it with `--moved` (the tour then goes on at once), and
+  trash the old copy or eject the DMG. A dev build never asks. Check the step with `--onboarding install`
+  (in a dev build the button only pretends).
 - `Sources/T3Notch/ClipMode.swift`: clip mode (⌘P) and select mode (hold ⌃⌥), the element probe, and the
   overlay that draws both.
 - `Sources/T3Notch/SelectTrigger.swift`: reports while ⌃⌥ is held in any app.

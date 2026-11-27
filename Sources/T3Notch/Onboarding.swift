@@ -8,7 +8,9 @@ import SwiftUI
 /// with the other keys.
 enum OnboardingStep: Int, CaseIterable {
     // The raw value is saved to resume the tour, so a new step goes last here.
-    case welcome, connect, hotkey, chats, tips, done, select
+    // `install` is the move into Applications (Install.swift). It comes before the tour, only
+    // for a copy outside Applications, and is never saved.
+    case welcome, connect, hotkey, chats, tips, done, select, install
 
     /// The steps in the order the tour shows them, one progress dot each.
     static let tour: [OnboardingStep] = [.welcome, .connect, .hotkey, .chats, .select, .tips]
@@ -21,7 +23,7 @@ enum OnboardingStep: Int, CaseIterable {
 
     /// The key steps; Esc skips them. Welcome and Connect cannot be skipped, since the island
     /// does nothing until it reaches T3.
-    var skippable: Bool { self != .welcome && self != .connect && self != .done }
+    var skippable: Bool { self != .welcome && self != .connect && self != .done && self != .install }
 }
 
 enum Onboarding {
@@ -35,6 +37,7 @@ enum Onboarding {
     }
 
     static func save(_ step: OnboardingStep) {
+        if step == .install { return }
         if step == .done { finish() } else { UserDefaults.standard.set(step.rawValue, forKey: stepKey) }
     }
 
@@ -104,6 +107,7 @@ enum OnboardingTip: CaseIterable {
 extension PanelController {
     /// Opens the island on the tour, at `step`.
     func startOnboarding(at step: OnboardingStep = .welcome) {
+        if step == .install { offerMove(then: .welcome); return }
         Onboarding.begin()
         Chime.prepare()
         onboardingHidOnce = false
@@ -155,7 +159,7 @@ extension PanelController {
             }
         case .hotkey:
             onboardingHidOnce = false
-        case .chats, .select, .tips:
+        case .chats, .select, .tips, .install:
             break
         case .done:
             onboardingTask = Task { [weak self] in
@@ -305,6 +309,14 @@ extension PanelController {
         guard let step = ui.onboarding else { return false }
         // In the Chats step the real chat list is open; it handles its own keys.
         if step == .chats && ui.pickerOpen { return false }
+        if step == .install {
+            switch Int(event.keyCode) {
+            case kVK_Escape: skipMove()
+            case kVK_Return, kVK_ANSI_KeypadEnter: moveToApplications()
+            default: break
+            }
+            return true
+        }
         if let name = KeyBinding(event: event)?.key ?? event.charactersIgnoringModifiers?.uppercased() {
             withAnimation(Motion.select) { _ = ui.onboardingHeld.insert(name) }
         }
@@ -360,7 +372,7 @@ struct OnboardingView: View {
                 stepContent.id(step).transition(StepChange())
             }
             .frame(maxWidth: .infinity)
-            if step != .done {
+            if step != .done && step != .install {
                 footer.padding(.top, 18)
             }
         }
@@ -382,6 +394,7 @@ struct OnboardingView: View {
         case .select: select
         case .tips: tips
         case .done: done
+        case .install: install
         }
     }
 
@@ -393,6 +406,42 @@ struct OnboardingView: View {
                 .shadow(color: .white.opacity(0.18), radius: 18)
             title("Your T3 chats, in the notch.")
             caption("Ask, follow and answer your agents from any app.")
+        }
+        .padding(.top, 6)
+    }
+
+    /// Before the tour, for a copy run from the DMG or Downloads: one button moves it into
+    /// Applications and starts it again there, and the tour goes on. Esc or "Not now" goes on
+    /// without moving.
+    private var install: some View {
+        let moving = ui.move == .moving
+        let failure: String? = { if case .failed(let message) = ui.move { return message }; return nil }()
+        return VStack(spacing: 14) {
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 72, height: 72)
+                .shadow(color: .white.opacity(0.18), radius: 18)
+            title("Move T3 Notch to Applications")
+            caption(failure ?? "It runs from there and keeps itself up to date.")
+            HStack(spacing: 10) {
+                Button { ui.onSkipMove?() } label: {
+                    Text("Not now").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).frame(height: 32).contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(moving)
+                Button { ui.onMove?() } label: {
+                    ZStack {
+                        Text(failure == nil ? "Move to Applications" : "Try again").opacity(moving ? 0 : 1)
+                        if moving { ProgressView().controlSize(.small).transition(.blurReplace) }
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .padding(.horizontal, 18).frame(height: 32).contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.tint(.white.opacity(0.12)).interactive(), in: .capsule)
+                .disabled(moving)
+            }
+            .padding(.top, 4)
+            .animation(Motion.snappy, value: moving)
         }
         .padding(.top, 6)
     }

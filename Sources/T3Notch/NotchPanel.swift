@@ -113,6 +113,8 @@ final class PanelController {
         ui.onIslandFrameChange = { [weak self] in self?.updateMouse() }
         ui.onOnboardingStep = { [weak self] step in self?.go(to: step) }
         ui.onOnboardingPickerClosed = { [weak self] in self?.onboardingPickerClosed() }
+        ui.onMove = { [weak self] in self?.moveToApplications() }
+        ui.onSkipMove = { [weak self] in self?.skipMove() }
         let host = FirstClickHostingView(rootView: OverlayView(store: store, ui: ui))
         host.sizingOptions = []
         panel.contentView = host

@@ -77,6 +77,11 @@ final class OverlayUIState {
     var onboardingSuccess = 0
     var onOnboardingStep: ((OnboardingStep) -> Void)?
     var onOnboardingPickerClosed: (() -> Void)?
+    /// The move-to-Applications step (Install.swift): its progress, and the tour step after it.
+    var move: MoveState = .idle
+    var moveNext: OnboardingStep?
+    var onMove: (() -> Void)?
+    var onSkipMove: (() -> Void)?
 }
 
 /// The island: a black shape that grows out of the notch, with glass controls inside.

@@ -71,9 +71,16 @@ The keys being pressed show in the bottom-right corner. [Watch the full-quality 
 
 ## Install
 
-Download `T3-Notch-<version>.zip` from the [latest release](https://github.com/lille-morille/t3-notch/releases/latest),
-unzip it, and move **T3 Notch.app** to Applications. It is signed and notarized, so it opens without warnings.
-Then turn on **Launch at login** in settings (right-click the status dot).
+Download [**T3-Notch.dmg**](https://github.com/lille-morille/t3-notch/releases/latest/download/T3-Notch.dmg),
+open it, and drag **T3 Notch** onto **Applications**. Then open T3 Notch from Applications. It is signed and
+notarized, so it opens without warnings, and the welcome tour starts in the notch. Turn on **Launch at login**
+in the tour's last step or in settings (right-click the status dot).
+
+If you open T3 Notch from the disk image or from Downloads, the island first offers to move it to
+Applications. One click copies it there, starts it again from there and goes on with the tour. Esc or
+**Not now** skips the move. The app cannot update itself until it runs from Applications.
+
+Each release also has `T3-Notch-<version>.zip`, the same app in a zip. Installed copies update from it.
 
 **Updates.** T3 Notch checks for new releases. When one is out, a green ↓ button appears in the island, left of
 the – button (and in settings). One click downloads it, checks that it is notarized and from
@@ -89,7 +96,7 @@ Install T3 Notch, a macOS notch overlay for T3 Code, from https://github.com/lil
 1. Check the requirements: macOS 26 or later (`sw_vers -productVersion`) and the T3 Code desktop
    app installed and running (`~/.t3/userdata/server-runtime.json` exists). Stop and tell me if
    either is missing.
-2. Download the .zip asset of the latest release
+2. Download the .zip asset of the latest release (not the .dmg)
    (https://api.github.com/repos/lille-morille/t3-notch/releases/latest lists it), unzip it with
    `ditto -x -k`, move "T3 Notch.app" to /Applications (or ~/Applications), and open it.
 3. Confirm it runs (`pgrep -x T3Notch`); right-clicking the status dot beside the notch opens
@@ -116,8 +123,8 @@ make install   # builds, signs, copies to ~/Applications and starts it
 ```
 
 A source build is **T3 Notch Dev** (bundle id `dev.t3notch.app.dev`). It has its own permissions,
-settings and logs (`~/Library/Logs/T3Notch-Dev`), and it never updates itself, so it can run beside the
-release. Global shortcuts go to whichever copy starts first; give the other one different keys in its
+settings and logs (`~/Library/Logs/T3Notch-Dev`), and it never updates itself or asks to be moved to
+Applications, so it can run beside the release. Global shortcuts go to whichever copy starts first; give the other one different keys in its
 settings.
 
 **Signing.** `make app` signs with the first *Apple Development* certificate in your keychain, so macOS keeps

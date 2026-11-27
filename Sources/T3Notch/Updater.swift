@@ -8,7 +8,8 @@ import Observation
 /// this app's, the island shows an update button. Installing downloads the release zip,
 /// checks it (Gatekeeper must accept it, so it is Developer ID signed and notarized, with
 /// our bundle id and, if this copy is a release, our team), swaps it in place of this app
-/// and relaunches.
+/// and relaunches. The release's DMG is for new installs; updates use its zip, which needs
+/// no mounting.
 @Observable
 @MainActor
 final class Updater {
@@ -81,6 +82,16 @@ final class Updater {
 
     func install() {
         guard case .available(let version) = state, let asset else { return }
+        // From the DMG or a translocated copy the swap cannot work; the move step at launch
+        // fixes that.
+        guard AppLocation.canUpdateInPlace else {
+            state = .failed("Move T3 Notch to Applications to update it.")
+            Task {
+                try? await Task.sleep(for: .seconds(8))
+                if case .failed = state { state = .available(version: version) }
+            }
+            return
+        }
         state = .installing(version: version)
         Task {
             do {
