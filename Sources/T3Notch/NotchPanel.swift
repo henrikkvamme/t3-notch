@@ -393,8 +393,8 @@ final class PanelController {
             Task { await store.interruptRun() }; return true
         case 36 where cmd && approval: // ⌘⏎
             Task { await store.respond(decision: "acceptForSession") }; return true
-        case 36 where cmd && !ui.pickerOpen: // ⌘⏎ steers the running turn
-            sendDraft(steer: true); return true
+        case 36 where cmd && !ui.pickerOpen: // ⌘⏎ does what ⏎ does not: queue or steer
+            sendDraft(steer: !Settings.enterSteers); return true
         case 36 where approval && !ui.pickerOpen && ui.draft.isEmpty: // ⏎
             Task { await store.respond(decision: "accept") }; return true
         case 125 where ui.pickerOpen: // ↓

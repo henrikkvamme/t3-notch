@@ -411,7 +411,7 @@ struct OverlayView: View {
             return
         }
         withAnimation(Motion.content) { ui.draft = ""; ui.clips = []; ui.removedClips = []; ui.clipDepth = 0 }
-        Task { await store.send(text, clips: clips) }
+        Task { await store.send(text, steer: Settings.enterSteers, clips: clips) }
         ui.onClose?() // sent: tuck the island away and hand focus back
     }
 
