@@ -131,6 +131,8 @@ final class StatusDotController {
     /// - on a notched screen, where fullscreen content sits below the notch: a normal
     ///   window filling the screen below the menu-bar strip, plus a full-width strip
     ///   from the same app covering the menu bar. A maximized window has no such strip.
+    /// Only normal (Dock) apps count: background tools such as agent cursor overlays keep a
+    /// transparent window over the whole screen, and they are never a fullscreen app.
     private static func isFullscreen(on screen: NSScreen) -> Bool {
         guard let primary = NSScreen.screens.first,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
@@ -145,6 +147,7 @@ final class StatusDotController {
         var body = Set<Int32>(), top = Set<Int32>()
         for w in list {
             guard let pid = w[kCGWindowOwnerPID as String] as? Int32, pid != me,
+                  NSRunningApplication(processIdentifier: pid)?.activationPolicy == .regular,
                   let layer = w[kCGWindowLayer as String] as? Int,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let r = CGRect(dictionaryRepresentation: b as CFDictionary),
