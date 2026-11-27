@@ -197,7 +197,7 @@ struct OverlayView: View {
                             if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
                                 permissionRow.padding(.top, 10).transition(.blurReplace)
                             }
-                            if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip || $0.id == ui.hoveredClip }) {
+                            if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip }) {
                                 clipRow.padding(.top, 10).transition(.blurReplace)
                             }
                             if ui.mode == .expanded {
@@ -417,7 +417,28 @@ struct OverlayView: View {
         let typing = !ui.draft.isEmpty || !ui.clips.isEmpty || ui.landing
             || (store.pendingRequest == nil && store.targetThreadId != nil)
         // Selections sit in the text as chips, where the caret was (see `DraftField`).
-        return DraftField(ui: ui, draft: ui.draft, clips: ui.clips,
+        return VStack(alignment: .leading, spacing: 8) {
+            // The pictures of the message, as T3's field shows them: above the text.
+            if !ui.clips.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(ui.clips) { clip in
+                            ClipThumb(clip: clip, open: ui.editingClip == clip.id, pointed: ui.hoveredClip == clip.id,
+                                      onOpen: {
+                                          withAnimation(Motion.content) { ui.editingClip = ui.editingClip == clip.id ? nil : clip.id }
+                                      },
+                                      onRemove: {
+                                          withAnimation(Motion.snappy) { ui.clips.removeAll { $0.id == clip.id } }
+                                          ui.onRequestFocus?()
+                                      })
+                                .transition(.blurReplace.combined(with: .scale(0.6)))
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+                .transition(.blurReplace)
+            }
+            DraftField(ui: ui, draft: ui.draft, clips: ui.clips,
                           labels: ui.clips.map { $0.comment.isEmpty ? $0.label : $0.comment },
                           editing: ui.editingClip, landing: ui.landing, onSubmit: { ui.onSend?() })
             .overlay(alignment: .topLeading) {
@@ -425,6 +446,7 @@ struct OverlayView: View {
                     Text("Message").font(.system(size: 14)).foregroundStyle(.tertiary).allowsHitTesting(false)
                 }
             }
+        }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .glassEffect(typing ? .regular.interactive() : .identity, in: .rect(cornerRadius: 16))
             .glassEffectID("field", in: glass) // morphs into the ⌘K search field
@@ -514,11 +536,10 @@ struct OverlayView: View {
         .animation(Motion.content, value: ui.missingPermissions)
     }
 
-    /// The picture of the selection whose chip the pointer is on, or of the one you clicked.
-    /// The clicked one also shows its comment. ⏎ and Esc go back to the message.
+    /// The picture of the selection you clicked, in the text or in the tray, with its comment. ⏎ and Esc go back to the message.
     private var clipRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let clip = ui.clips.first(where: { $0.id == ui.hoveredClip }) ?? ui.clips.first(where: { $0.id == ui.editingClip }) {
+            if let clip = ui.clips.first(where: { $0.id == ui.editingClip }) {
                 Image(nsImage: clip.thumbnail)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -723,5 +744,47 @@ private struct HeaderIcon: View {
         .onHover { hovering = $0; onHover($0) }
         .onDisappear { onHover(false) }
         .animation(Motion.snappy, value: hovering)
+    }
+}
+
+/// One picture in the tray above the message. A click opens it with its comment; the cross,
+/// which shows under the pointer, takes it out of the message.
+private struct ClipThumb: View {
+    let clip: Clip
+    let open: Bool
+    /// The pointer is on this selection's chip in the text.
+    let pointed: Bool
+    let onOpen: () -> Void
+    let onRemove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Image(nsImage: clip.thumbnail)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(open ? Color.accentColor : .white.opacity(pointed || hovering ? 0.45 : 0.14),
+                                  lineWidth: open ? 1.5 : 1)
+            }
+            .overlay(alignment: .topTrailing) {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .frame(width: 16, height: 16)
+                        .background(.black.opacity(0.7), in: .rect(cornerRadius: 5))
+                }
+                .buttonStyle(.plain)
+                .padding(3)
+                .opacity(hovering ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onOpen)
+            .onHover { hovering = $0 }
+            .animation(Motion.snappy, value: hovering)
+            .animation(Motion.snappy, value: open)
+            .accessibilityLabel(clip.comment.isEmpty ? clip.label : clip.comment)
     }
 }

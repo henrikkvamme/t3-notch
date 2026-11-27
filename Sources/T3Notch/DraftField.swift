@@ -406,7 +406,8 @@ final class ChipAttachment: NSTextAttachment {
         super.init(data: nil, ofType: nil)
         let font = NSFont.systemFont(ofSize: 12)
         let text = NSAttributedString(string: label, attributes: [
-            .font: font, .foregroundColor: NSColor.white.withAlphaComponent(strong ? 0.95 : 0.7),
+            // The one accent colour, as T3's field names an attached picture.
+            .font: font, .foregroundColor: NSColor(calibratedRed: 0.47, green: 0.71, blue: 1, alpha: strong ? 1 : 0.8),
         ])
         let picture: CGFloat = 14, pad: CGFloat = 3, gap: CGFloat = 5, trailing: CGFloat = 7, side: CGFloat = 2
         let textWidth = min(ceil(text.size().width), 170)
@@ -415,11 +416,11 @@ final class ChipAttachment: NSTextAttachment {
             // A little air on both sides, so two chips or a chip and a word do not touch.
             let body = rect.insetBy(dx: side, dy: 0.5)
             let shape = NSBezierPath(roundedRect: body, xRadius: 6, yRadius: 6)
-            NSColor.white.withAlphaComponent(0.12).setFill()
-            shape.fill()
-            (editing ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.14)).setStroke()
-            shape.lineWidth = editing ? 1.5 : 1
-            shape.stroke()
+            // No box, as in T3's field: a small picture and its name. The open one has a ground.
+            if editing {
+                NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
+                shape.fill()
+            }
             let frame = NSRect(x: body.minX + pad, y: body.midY - picture / 2, width: picture, height: picture)
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(roundedRect: frame, xRadius: 3.5, yRadius: 3.5).addClip()
