@@ -502,10 +502,12 @@ final class ClipController {
     func latch() {
         guard select != nil, !finished else { return }
         isLatched = true
+        state.latched = true
     }
 
     func unlatch() {
         isLatched = false
+        state.latched = false
         release()
     }
 
@@ -850,6 +852,8 @@ final class ClipState {
 
     var active = false
     var phase = Phase.clip
+    /// Select mode stays on with the keys up: it looks as clip mode does, so the mode shows.
+    var latched = false
     var frozen: [Frozen] = []
     /// Every screen's frame, to choose the one that shows the comment field.
     var screens: [CGRect] = []
@@ -1519,8 +1523,10 @@ private struct ClipOverlayView: View {
                     .frame(width: screenRect.width, height: screenRect.height)
             }
             // Dim with a hole where the highlight is. Not while ⌃⌥ is only held: the screen
-            // is live then, and nothing but the highlight shows.
-            Rectangle().fill(.black.opacity(state.active && state.phase != .hover ? 0.38 : 0))
+            // is live then, and nothing but the highlight shows. The mode that stays on dims
+            // as clip mode does, so you see that it is on.
+            let quiet = state.phase == .hover && !state.latched
+            Rectangle().fill(.black.opacity(state.active && !quiet ? 0.38 : 0))
                 .overlay(alignment: .topLeading) {
                     if let h = highlight {
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -1547,12 +1553,14 @@ private struct ClipOverlayView: View {
                 return CGRect(x: l.minX - 6, y: l.minY - 6, width: 12, height: 12)
             })) {
                 let isDot = highlight == nil
-                let fill = selecting ? Color.accentColor.opacity(state.phase == .hover ? 0.08 : 0) : .white.opacity(isDot ? 0.95 : 0)
+                // The mode that stays on outlines in white, as clip mode does.
+                let accent = selecting && !(state.latched && state.phase == .hover)
+                let fill = selecting ? Color.accentColor.opacity(quiet ? 0.08 : 0) : .white.opacity(isDot ? 0.95 : 0)
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(fill)
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(selecting ? Color.accentColor : .white.opacity(0.9), lineWidth: selecting ? 2 : 1.5))
-                    .shadow(color: .black.opacity(isDot || selecting ? 0.35 : 0), radius: 2)
+                        .strokeBorder(accent ? Color.accentColor : .white.opacity(0.9), lineWidth: accent ? 2 : 1.5))
+                    .shadow(color: .black.opacity(isDot || accent ? 0.35 : 0), radius: 2)
                     .frame(width: shape.width, height: shape.height)
                     .offset(x: shape.minX, y: shape.minY)
                     .allowsHitTesting(false)
@@ -1592,6 +1600,7 @@ private struct ClipOverlayView: View {
         .animation(Motion.select, value: state.selection) // the comment field moves with it
         .animation(Motion.snappy, value: state.hoveredSaved)
         .animation(selecting ? Motion.hold : Motion.content, value: state.active)
+        .animation(Motion.hold, value: state.latched)
         .contentShape(Rectangle())
         .onContinuousHover(coordinateSpace: .local) { phase in
             if case .active(let p) = phase, state.drag == nil { onHover(global(p)) }
