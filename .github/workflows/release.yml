@@ -22,6 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # dmgbuild, which lays out the DMG (scripts/make-dmg.sh), needs Python 3.10 or later.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Import the Developer ID certificate
         env:
           P12: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
@@ -52,5 +57,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/T3-Notch-*.zip dist/T3-Notch-*.zip.sha256 \
+          # The DMG is the download; the zip is what installed copies update from.
+          gh release create "$GITHUB_REF_NAME" dist/T3-Notch-*.dmg dist/T3-Notch-*.dmg.sha256 dist/T3-Notch.dmg \
+            dist/T3-Notch-*.zip dist/T3-Notch-*.zip.sha256 \
             --title "T3 Notch ${GITHUB_REF_NAME}" --generate-notes
