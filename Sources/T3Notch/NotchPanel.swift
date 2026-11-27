@@ -202,7 +202,7 @@ final class PanelController {
         draftOwner = key
         syncedDraft = nil
         ui.clipDepth = 0
-        ui.replyScroll.scrollTo(edge: .top) // a new chat starts at the top of its reply
+        if ui.replyOffset > 0 { ui.replyScroll.scrollTo(edge: .top) } // a new chat starts at the top of its reply
         show(next)
         ui.draftChats = shelf.chats
     }

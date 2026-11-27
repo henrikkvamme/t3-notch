@@ -68,8 +68,9 @@ final class OverlayUIState {
     }
     /// The reply's scroll position, so ⌃J/⌃K can scroll it from the keyboard.
     var replyScroll = ScrollPosition(edge: .top)
-    var replyOffset: CGFloat = 0
-    var replyMaxOffset: CGFloat = 0
+    // Read by key handling only, so a scroll redraws nothing.
+    @ObservationIgnored var replyOffset: CGFloat = 0
+    @ObservationIgnored var replyMaxOffset: CGFloat = 0
     /// The reply text's laid-out height; the scroll area is sized to it (up to a cap).
     var replyTextHeight: CGFloat = 0
 
@@ -310,12 +311,16 @@ struct OverlayView: View {
                 .animation(Motion.message, value: r.id)
             }
             .scrollIndicators(.never)
-            .scrollPosition($ui.replyScroll)
+            // SwiftUI writes the position back while it scrolls. A write of the same value
+            // must not reach the observed state: it would redraw the island, which asks for
+            // the scroll again, without end.
+            .scrollPosition(Binding(get: { ui.replyScroll },
+                                    set: { if ui.replyScroll != $0 { ui.replyScroll = $0 } }))
             .onScrollGeometryChange(for: [CGFloat].self, of: { g in
                 [g.contentOffset.y, max(0, g.contentSize.height - g.containerSize.height)]
             }) { _, v in
-                ui.replyOffset = v[0]
-                ui.replyMaxOffset = v[1]
+                if ui.replyOffset != v[0] { ui.replyOffset = v[0] }
+                if ui.replyMaxOffset != v[1] { ui.replyMaxOffset = v[1] }
             }
             // Exactly the text's height, capped; a ScrollView's own ideal height can go stale.
             .frame(height: min(ui.replyTextHeight, ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight))
