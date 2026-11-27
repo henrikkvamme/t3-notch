@@ -861,7 +861,7 @@ final class PanelController {
     /// Scrolls the reply by about four lines per press.
     private func scrollReply(by step: Int) {
         let y = min(max(ui.replyOffset + CGFloat(step) * 64, 0), ui.replyMaxOffset)
-        withAnimation(Motion.snappy) { ui.replyScroll.scrollTo(y: y) }
+        ui.scrollReply(to: .y(y), animation: Motion.snappy)
     }
 
     private var lastSteer = false

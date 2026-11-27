@@ -66,8 +66,19 @@ final class OverlayUIState {
     var dotHiddenByUser = UserDefaults.standard.bool(forKey: "statusDotHidden") {
         didSet { UserDefaults.standard.set(dotHiddenByUser, forKey: "statusDotHidden") }
     }
-    /// The reply's scroll position, so ⌃J/⌃K can scroll it from the keyboard.
-    var replyScroll = ScrollPosition(edge: .top)
+    /// Where the reply's scroll view must go next. The position itself is view state (see
+    /// `ReplyScroller`): SwiftUI redraws from inside the write of an observed position, reads
+    /// the old value, and asks for the same scroll again, without end.
+    enum ScrollTarget: Equatable { case y(CGFloat), bottom }
+    struct ScrollOrder: Equatable {
+        var seq = 0
+        var target = ScrollTarget.y(0)
+        var animation: Animation?
+    }
+    private(set) var scrollOrder = ScrollOrder()
+    func scrollReply(to target: ScrollTarget, animation: Animation? = nil) {
+        scrollOrder = ScrollOrder(seq: scrollOrder.seq &+ 1, target: target, animation: animation)
+    }
     // Read by key handling only, so a scroll redraws nothing.
     @ObservationIgnored var replyOffset: CGFloat = 0
     @ObservationIgnored var replyMaxOffset: CGFloat = 0
@@ -96,12 +107,12 @@ final class OverlayUIState {
         guard abs(replyOffset - historyHeight) > 1 else { replyInPlace = true; showHistory(); return }
         replyInPlace = false
         if historyVisible { historyVisible = false }
-        replyScroll.scrollTo(y: historyHeight)
+        scrollReply(to: .y(historyHeight))
     }
 
     /// Back from the history to the reply, in view of the eye.
     func returnToReply() {
-        withAnimation(Motion.content) { replyScroll.scrollTo(y: historyHeight) }
+        scrollReply(to: .y(historyHeight), animation: Motion.content)
     }
 
     private func showHistory() {
@@ -117,14 +128,14 @@ final class OverlayUIState {
             if let from = growingFrom {
                 // Older entries came in above: stay on what you were reading.
                 growingFrom = nil
-                replyScroll.scrollTo(y: replyOffset + (top - from))
+                scrollReply(to: .y(replyOffset + (top - from)))
                 return
             }
             // The chat changed above the reply while you were on the reply.
             if reveal == 0 || grew < 0 { anchorReply(); return }
         }
         if !replyInPlace {
-            if abs(replyOffset - top) <= 1 { replyInPlace = true; showHistory() } else { replyScroll.scrollTo(y: top) }
+            if abs(replyOffset - top) <= 1 { replyInPlace = true; showHistory() } else { scrollReply(to: .y(top)) }
             return
         }
         let up = max(0, (top - replyOffset).rounded())
@@ -390,11 +401,7 @@ struct OverlayView: View {
               }
             }
             .scrollIndicators(.never)
-            // SwiftUI writes the position back while it scrolls. A write of the same value
-            // must not reach the observed state: it would redraw the island, which asks for
-            // the scroll again, without end.
-            .scrollPosition(Binding(get: { ui.replyScroll },
-                                    set: { if ui.replyScroll != $0 { ui.replyScroll = $0 } }))
+            .modifier(ReplyScroller(ui: ui))
             .onScrollGeometryChange(for: [CGFloat].self, of: { g in
                 [g.contentOffset.y, max(0, g.contentSize.height - g.containerSize.height)]
             }) { _, v in
@@ -409,7 +416,7 @@ struct OverlayView: View {
             .onChange(of: r.text) {
                 // Follow the stream only while you are at its end: reading further up stays put.
                 if r.streaming, ui.replyOffset >= ui.replyMaxOffset - 24 {
-                    withAnimation(Motion.content) { ui.replyScroll.scrollTo(edge: .bottom) }
+                    ui.scrollReply(to: .bottom, animation: Motion.content)
                 }
             }
             if !r.images.isEmpty {

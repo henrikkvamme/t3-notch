@@ -212,3 +212,24 @@ struct ReplyHeight: ViewModifier {
         content.frame(height: min(ui.replyTextHeight + ui.reveal, cap))
     }
 }
+
+/// Holds the reply's scroll position as view state and carries out the orders of
+/// `OverlayUIState.scrollReply`. SwiftUI writes the position back while it scrolls; that
+/// write stays here and redraws nothing else.
+struct ReplyScroller: ViewModifier {
+    let ui: OverlayUIState
+    @State private var position = ScrollPosition(edge: .top)
+
+    func body(content: Content) -> some View {
+        content
+            .scrollPosition($position)
+            .onChange(of: ui.scrollOrder) { _, order in
+                withAnimation(order.animation) {
+                    switch order.target {
+                    case .y(let y): position.scrollTo(y: y)
+                    case .bottom: position.scrollTo(edge: .bottom)
+                    }
+                }
+            }
+    }
+}
