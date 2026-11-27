@@ -27,26 +27,50 @@ struct ReplyContent: View {
     enum Segment { case text(String), image(src: String, alt: String) }
 
     /// One list line: how deep it sits, its mark ("•" or "2.") and its text.
-    struct Item: Equatable { let depth: Int; let mark: String; var text: String }
+    struct Item: Equatable {
+        let depth: Int
+        let mark: String
+        var text: String
+        /// A task: done or not. Nil for a plain line.
+        var done: Bool?
+    }
 
     enum Block: Equatable {
-        case paragraph(String), heading(level: Int, String), list([Item]), code(String), quote(String), rule
+        case paragraph(String), heading(level: Int, String), list([Item]), quote(String), rule
+        case code(String, language: String?)
+        case table(header: [String], rows: [[String]])
     }
 
     private static let listMark = try! NSRegularExpression(pattern: #"^(\s*)([-*+]|\d{1,3}[.)])\s+(.*)$"#)
     private static let headingMark = try! NSRegularExpression(pattern: #"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$"#)
 
     /// The block structure of markdown text: headings, lists, code, quotes, rules and
-    /// paragraphs. Inline marks (bold, code, links) stay in each block's text. A table has
-    /// no place in a narrow island, so its lines show as code, where its columns line up.
+    /// tables and paragraphs. Inline marks (bold, code, links) stay in each block's text.
     static func blocks(_ text: String) -> [Block] {
         var out: [Block] = []
         var paragraph: [String] = [], items: [Item] = [], quote: [String] = [], code: [String]?, table: [String] = []
+        var language: String?, ruled = false
+        func cells(_ line: String) -> [String] {
+            var out: [String] = [], cell = "", escaped = false
+            for c in line.dropFirst().dropLast() {
+                if escaped { cell.append(c); escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == "|" { out.append(cell.trimmingCharacters(in: .whitespaces)); cell = "" }
+                else { cell.append(c) }
+            }
+            out.append(cell.trimmingCharacters(in: .whitespaces))
+            return out
+        }
         func flush() {
             if !paragraph.isEmpty { out.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
             if !items.isEmpty { out.append(.list(items)); items = [] }
             if !quote.isEmpty { out.append(.quote(quote.joined(separator: "\n"))); quote = [] }
-            if !table.isEmpty { out.append(.code(table.joined(separator: "\n"))); table = [] }
+            if !table.isEmpty {
+                // With the line of dashes under its first line it is a table; else it is only text.
+                if ruled { out.append(.table(header: cells(table[0]), rows: table.dropFirst().map(cells))) }
+                else { out.append(.paragraph(table.joined(separator: "\n"))) }
+                table = []; ruled = false
+            }
         }
         func groups(_ re: NSRegularExpression, _ line: String) -> [String]? {
             let ns = line as NSString
@@ -56,16 +80,22 @@ struct ReplyContent: View {
         for line in text.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if code != nil {
-                if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { out.append(.code(code!.joined(separator: "\n"))); code = nil }
+                if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { out.append(.code(code!.joined(separator: "\n"), language: language)); code = nil }
                 else { code!.append(line) }
                 continue
             }
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { flush(); code = []; continue }
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                flush()
+                code = []
+                let name = trimmed.drop { $0 == "`" || $0 == "~" }.split(separator: " ").first.map(String.init)
+                language = name?.isEmpty == false ? name : nil
+                continue
+            }
             if trimmed.isEmpty { flush(); continue }
             if trimmed.hasPrefix("|") && trimmed.hasSuffix("|") && trimmed.count > 1 {
                 if table.isEmpty { flush() }
-                // The line of dashes under a table's header says nothing.
-                if !trimmed.allSatisfy({ "|-: ".contains($0) }) { table.append(trimmed) }
+                // The line of dashes under a table's header says that it is one.
+                if trimmed.allSatisfy({ "|-: ".contains($0) }) { if table.count == 1 { ruled = true } } else { table.append(trimmed) }
                 continue
             }
             if !table.isEmpty { flush() }
@@ -75,7 +105,13 @@ struct ReplyContent: View {
             if let g = groups(listMark, line) {
                 if items.isEmpty { flush() }
                 let mark = "-*+".contains(g[1]) ? "\u{2022}" : g[1].replacingOccurrences(of: ")", with: ".")
-                items.append(Item(depth: min(g[0].replacingOccurrences(of: "\t", with: "    ").count / 2, 4), mark: mark, text: g[2]))
+                let depth = min(g[0].replacingOccurrences(of: "\t", with: "    ").count / 2, 4)
+                var item = Item(depth: depth, mark: mark == "\u{2022}" ? ["\u{2022}", "\u{25E6}", "\u{25AA}"][min(depth, 2)] : mark, text: g[2])
+                for (box, done) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] where item.text.hasPrefix(box) {
+                    item.done = done
+                    item.text = String(item.text.dropFirst(4))
+                }
+                items.append(item)
                 continue
             }
             if trimmed.hasPrefix(">") {
@@ -88,7 +124,7 @@ struct ReplyContent: View {
             if !quote.isEmpty { quote.append(trimmed); continue }
             paragraph.append(line)
         }
-        if let code { flush(); out.append(.code(code.joined(separator: "\n"))) } else { flush() }
+        if let code { flush(); out.append(.code(code.joined(separator: "\n"), language: language)) } else { flush() }
         return out
     }
 
@@ -123,9 +159,29 @@ struct ReplyContent: View {
         return path.hasPrefix("/") ? URL(fileURLWithPath: path) : nil
     }
 
+    private static let contextImage = try! NSRegularExpression(pattern: #"!\[([^\]]*)\]\((t3-context://[^)\s]+)\)"#)
+    /// The blue of a chip and a link, as T3 has it on a dark ground.
+    static let accent = Color(red: 0.47, green: 0.71, blue: 1)
+
+    /// Inline markdown as T3 shows it: code on a tinted ground, links in blue, and T3's own
+    /// links (an attached picture or element, another chat) as a name in blue, not a link.
     static func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
+        // T3 writes an attached picture as an image; here it is a name, as any other chip.
+        let text = contextImage.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length),
+                                                         withTemplate: "[$1]($2)")
+        guard var out = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else { return AttributedString(s) }
+        var chips: [Range<AttributedString.Index>] = [], links: [Range<AttributedString.Index>] = [], code: [Range<AttributedString.Index>] = []
+        for run in out.runs {
+            if let link = run.link {
+                if ["t3-context", "t3-thread", "t3-citation"].contains(link.scheme ?? "") { chips.append(run.range) } else { links.append(run.range) }
+            }
+            if run.inlinePresentationIntent?.contains(.code) == true { code.append(run.range) }
+        }
+        for range in chips { out[range].link = nil; out[range].foregroundColor = accent }
+        for range in links { out[range].foregroundColor = accent }
+        for range in code { out[range].backgroundColor = Color.white.opacity(0.1) }
+        return out
     }
 }
 
@@ -147,18 +203,50 @@ private struct BlockView: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     // The mark hangs: a long line goes on under its own text, not under the mark.
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(item.mark).font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
-                            .frame(minWidth: 10, alignment: .trailing)
+                        if let done = item.done {
+                            Image(systemName: done ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 11)).foregroundStyle(done ? ReplyContent.accent : .secondary)
+                                .frame(minWidth: 10, alignment: .trailing)
+                        } else {
+                            Text(item.mark).font(.system(size: 13).monospacedDigit()).foregroundStyle(.secondary)
+                                .frame(minWidth: 10, alignment: .trailing)
+                        }
                         Text(ReplyContent.markdown(item.text)).font(.system(size: 13)).textSelection(.enabled)
                     }
                     .padding(.leading, CGFloat(item.depth) * 14)
                 }
             }
-        case .code(let t):
-            Text(t).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(.white.opacity(0.07), in: .rect(cornerRadius: 8))
+        case .code(let t, let language):
+            VStack(alignment: .leading, spacing: 4) {
+                if let language {
+                    Text(language).font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
+                }
+                Text(t).font(.system(size: 11.5, design: .monospaced)).textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(.white.opacity(0.07), in: .rect(cornerRadius: 8))
+        case .table(let header, let rows):
+            // Wider than the island: it scrolls sideways, as in T3.
+            ScrollView(.horizontal) {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
+                    GridRow {
+                        ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
+                            Text(ReplyContent.markdown(cell)).font(.system(size: 12, weight: .semibold)).padding(.vertical, 6)
+                        }
+                    }
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+                        GridRow {
+                            ForEach(Array(header.indices), id: \.self) { i in
+                                Text(ReplyContent.markdown(row.indices.contains(i) ? row[i] : ""))
+                                    .font(.system(size: 12)).textSelection(.enabled).padding(.vertical, 5)
+                            }
+                        }
+                    }
+                }
+            }
+            .scrollIndicators(.never)
         case .quote(let t):
             Text(ReplyContent.markdown(t)).font(.system(size: 13)).foregroundStyle(.secondary).textSelection(.enabled)
                 .padding(.leading, 10)

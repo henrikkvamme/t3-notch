@@ -286,7 +286,7 @@ final class Store {
     private var threadStreamId: String?
     private var threadStreamRpc: RPCClient?
     private var shellStreamId: String?
-    private(set) var messages: [String: JSON] = [:]
+    private(set) var messages: [String: JSON] = [:] { didSet { transcriptVersion &+= 1 } }
     private(set) var runtimeRequests: [String: JSON] = [:]
     private(set) var requestItems: [String: JSON] = [:]
 
@@ -847,7 +847,7 @@ final class Store {
         if let old = threadStreamId { threadStreamRpc?.interrupt(old) }
         subscribedThreadId = key
         threadStreamRpc = target.rpc
-        messages = [:]; runtimeRequests = [:]; requestItems = [:]
+        messages = [:]; runtimeRequests = [:]; requestItems = [:]; shownItems = [:]
         threadStreamId = target.rpc.subscribe("orchestration.subscribeThread",
                                        ["threadId": .string(target.threadId), "acceptBoundedSnapshot": true],
                                        onValue: { [weak self] item in self?.applyThread(item, threadId: key) },
@@ -873,14 +873,15 @@ final class Store {
             let items = (p["turnItems"].array ?? []) + (p["visibleTurnItems"].array ?? []).map { $0["item"] }
             requestItems = [:]
             activityItems = [:]
-            for i in items { keepRequestItem(i); keepActivityItem(i) }
+            shownItems = [:]
+            for i in items { keepRequestItem(i); keepActivityItem(i); keepShownItem(i) }
         case "event":
             let e = item["event"]
             let payload = e["payload"]
             switch e["type"].string {
             case "message.updated": if let id = payload["id"].string { messages[id] = payload }
             case "runtime-request.updated": if let id = payload["id"].string { runtimeRequests[id] = payload }
-            case "turn-item.updated": keepRequestItem(payload); keepActivityItem(payload)
+            case "turn-item.updated": keepRequestItem(payload); keepActivityItem(payload); keepShownItem(payload)
             default: break
             }
         default:
@@ -906,6 +907,114 @@ final class Store {
             let oldest = activityItems.values.sorted { Self.started($0) < Self.started($1) }.prefix(100)
             for o in oldest { if let id = o["id"].string { activityItems[id] = nil } }
         }
+    }
+
+    // MARK: - The chat's history
+
+    /// One thing the chat shows: a message of yours, a reply, or a page the agent made.
+    struct Entry: Identifiable, Equatable {
+        enum Kind: Equatable {
+            case user, assistant
+            /// A page from T3's `html_render` tool: an attachment, with the heights T3 measured.
+            case page(title: String, height: Double, heights: [[Double]])
+        }
+        let id: String
+        let kind: Kind
+        /// The message, or a page's attachment id.
+        let text: String
+        /// Image attachments, by id.
+        let images: [String]
+        let at: Double
+    }
+
+    /// Tool results that T3 shows as part of the chat: a page (`html_render`) and words to you
+    /// (`send_to_user`). Other tool steps are not history.
+    private(set) var shownItems: [String: Entry] = [:] { didSet { transcriptVersion &+= 1 } }
+    @ObservationIgnored private var transcriptVersion = 0
+    @ObservationIgnored private var transcriptCache: (version: Int, entries: [Entry])?
+
+    /// What a tool gave back, under the envelopes that providers put around it
+    /// (`packages/shared/src/toolOutput.ts`, `readResult`).
+    private static func toolData(_ value: JSON, depth: Int = 0) -> (data: JSON?, failed: Bool) {
+        guard depth < 8 else { return (nil, false) }
+        switch value {
+        case .string(let s):
+            guard s.count < 400_000, let parsed = try? JSON.parse(Data(s.utf8)) else { return (nil, false) }
+            if case .string = parsed { return (nil, false) }
+            return toolData(parsed, depth: depth + 1)
+        case .array(let blocks):
+            var data: JSON?, failed = false
+            for block in blocks.prefix(64) {
+                let text = block["text"]
+                let r = toolData(text.object == nil ? text : (text["text"].isNull ? text : text["text"]), depth: depth + 1)
+                if data == nil { data = r.data }
+                failed = failed || r.failed
+            }
+            return (data, failed)
+        case .object:
+            let failed = value["isError"].bool == true || value["is_error"].bool == true
+                || value["_tag"].string == "OrchestratorMcpFailure" || !value["error"].isNull
+            let content = value["structuredContent"].isNull ? value["content"] : value["structuredContent"]
+            if !content.isNull {
+                let nested = toolData(content, depth: depth + 1)
+                return (nested.data, failed || nested.failed)
+            }
+            return (value, failed)
+        default:
+            return (nil, false)
+        }
+    }
+
+    private func keepShownItem(_ item: JSON) {
+        guard item["type"].string == "dynamic_tool", let id = item["id"].string, !item["output"].isNull else { return }
+        let result = Self.toolData(item["output"])
+        guard !result.failed, let data = result.data else { return }
+        let at = Self.started(item)
+        let page = data["htmlRender"]
+        if let attachment = page["attachmentId"].string, !attachment.isEmpty, let height = page["height"].double {
+            let heights = (page["heights"].array ?? []).compactMap { pair -> [Double]? in
+                guard let p = pair.array, p.count == 2, let w = p[0].double, let h = p[1].double else { return nil }
+                return [w, h]
+            }
+            let title = (page["title"].string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            shownItems[id] = Entry(id: id, kind: .page(title: title.isEmpty ? "HTML" : title, height: height, heights: heights),
+                                   text: attachment, images: [], at: at)
+        } else if (item["toolName"].string ?? "").hasSuffix("send_to_user"),
+                  let words = data["sentMessage"].string, !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            shownItems[id] = Entry(id: id, kind: .assistant, text: words, images: [], at: at)
+        }
+    }
+
+    /// The chat in order, oldest first: your messages, the replies, and the pages.
+    var transcript: [Entry] {
+        // Read both, so a view that shows the history follows them.
+        let messages = messages, shown = shownItems
+        guard subscribedThreadId == targetThreadId else { return [] }
+        if let cached = transcriptCache, cached.version == transcriptVersion { return cached.entries }
+        var entries = Array(shown.values)
+        for m in messages.values where m["notification"].isNull {
+            guard let id = m["id"].string, let role = m["role"].string, role == "user" || role == "assistant" else { continue }
+            let images = (m["attachments"].array ?? []).filter { $0["type"].string == "image" }.compactMap { $0["id"].string }
+            let text = m["text"].string ?? ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty else { continue }
+            entries.append(Entry(id: id, kind: role == "user" ? .user : .assistant, text: text, images: images, at: Self.started(m)))
+        }
+        entries.sort { ($0.at, $0.id) < ($1.at, $1.id) }
+        transcriptCache = (transcriptVersion, entries)
+        return entries
+    }
+
+    /// A request for an attachment that T3 serves as a page, with the token it needs.
+    func pageRequest(_ attachmentId: String) async -> URLRequest? {
+        let env = targetThread?["environmentId"].string
+        guard !Store.demo, let rpc = rpc(for: env), let (base, token) = http(for: env) else { return nil }
+        guard let result = try? await rpc.call("assets.createUrl", [
+            "resource": ["_tag": "attachment", "attachmentId": .string(attachmentId), "fileName": "page.html",
+                         "mimeType": "text/html", "disposition": "inline"],
+        ]), let relative = result["relativeUrl"].string, let url = URL(string: relative, relativeTo: base) else { return nil }
+        var request = URLRequest(url: url.absoluteURL)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return request
     }
 
     private func keepRequestItem(_ item: JSON) {

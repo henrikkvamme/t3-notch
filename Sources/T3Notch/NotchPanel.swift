@@ -87,6 +87,7 @@ final class PanelController {
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var localKeyMonitor: Any?
+    private var scrollMonitor: Any?
     private var heldKeyMonitor: Any?
     private var peekHideTask: Task<Void, Never>?
     private var orderOutTask: Task<Void, Never>?
@@ -149,6 +150,15 @@ final class PanelController {
             guard let self else { return false }
             return !self.ui.draft.isEmpty || !self.ui.clips.isEmpty || self.clipper != nil || self.ui.sending > 0
         }
+        // A scroll up on a peek asks for more than it shows: the island opens, with the history.
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, self.ui.mode == .peek, event.scrollingDeltaY > 3, self.ui.replyOffset <= 0,
+                      event.window === self.panel else { return }
+                self.expand()
+            }
+            return event
+        }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
@@ -202,7 +212,7 @@ final class PanelController {
         draftOwner = key
         syncedDraft = nil
         ui.clipDepth = 0
-        if ui.replyOffset > 0 { ui.replyScroll.scrollTo(edge: .top) } // a new chat starts at the top of its reply
+        ui.anchorReply() // a new chat starts at the top of its reply
         show(next)
         ui.draftChats = shelf.chats
     }
@@ -789,6 +799,7 @@ final class PanelController {
                 withAnimation(Motion.content) { ui.editingClip = nil }
                 if ui.clips.contains(where: { $0.id == open }) { focusTextField(); return true }
             }
+            if ui.reveal > 0 { ui.returnToReply(); return true } // back from the history
             hide(); return true
         case 13 where mods == .command: // ⌘W
             hide(); return true
@@ -861,6 +872,7 @@ final class PanelController {
         let text = ui.draft
         let clips = ui.clips
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !clips.isEmpty else { return }
+        if ui.reveal > 0 { ui.returnToReply() } // what you send shows under the newest
         // Keep the draft when the selections cannot go in one message.
         guard Store.clipPlan(clips) != nil else {
             store.lastSendError = "Too many or too large selections for one message. Remove some and send again."

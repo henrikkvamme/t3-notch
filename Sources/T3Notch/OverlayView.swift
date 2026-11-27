@@ -74,6 +74,79 @@ final class OverlayUIState {
     /// The reply text's laid-out height; the scroll area is sized to it (up to a cap).
     var replyTextHeight: CGFloat = 0
 
+    // MARK: The history above the reply
+
+    /// How many older entries are in the reply area, above the reply. None while it peeks.
+    var historyShown = 0
+    /// The history shows only when the reply is in its place under it.
+    var historyVisible = false
+    /// How far up in the history you are, in points. The island grows by it.
+    var reveal: CGFloat = 0
+    @ObservationIgnored var historyHeight: CGFloat = 0
+    @ObservationIgnored var historyTotal = 0
+    /// The reply's top is at the top of the view (or you moved from there yourself).
+    @ObservationIgnored private var replyInPlace = true
+    @ObservationIgnored private var lastHistoryHeight: CGFloat = 0
+    /// More history was asked for: the height it had, to keep your place when it comes.
+    @ObservationIgnored private var growingFrom: CGFloat?
+
+    /// Puts the reply's top at the top of the view, with the history out of sight above it.
+    func anchorReply() {
+        if reveal != 0 { reveal = 0 }
+        guard abs(replyOffset - historyHeight) > 1 else { replyInPlace = true; showHistory(); return }
+        replyInPlace = false
+        if historyVisible { historyVisible = false }
+        replyScroll.scrollTo(y: historyHeight)
+    }
+
+    /// Back from the history to the reply, in view of the eye.
+    func returnToReply() {
+        withAnimation(Motion.content) { replyScroll.scrollTo(y: historyHeight) }
+    }
+
+    private func showHistory() {
+        if !historyVisible, historyShown > 0 { withAnimation(Motion.content) { historyVisible = true } }
+    }
+
+    /// The scroll offset or the history's height changed.
+    func replyGeometryChanged() {
+        let top = historyHeight
+        if top != lastHistoryHeight {
+            let grew = top - lastHistoryHeight
+            lastHistoryHeight = top
+            if let from = growingFrom {
+                // Older entries came in above: stay on what you were reading.
+                growingFrom = nil
+                replyScroll.scrollTo(y: replyOffset + (top - from))
+                return
+            }
+            // The chat changed above the reply while you were on the reply.
+            if reveal == 0 || grew < 0 { anchorReply(); return }
+        }
+        if !replyInPlace {
+            if abs(replyOffset - top) <= 1 { replyInPlace = true; showHistory() } else { replyScroll.scrollTo(y: top) }
+            return
+        }
+        let up = max(0, (top - replyOffset).rounded())
+        if reveal != up { reveal = up }
+        // At the top of what is here: bring more.
+        if up > 0, replyOffset <= 1, historyShown < historyTotal, growingFrom == nil {
+            growingFrom = top
+            historyShown += 12
+        }
+    }
+
+    /// The history comes with the open island and goes with it.
+    func historyFollows(_ mode: PanelController.Mode) {
+        let wanted = mode == .expanded ? max(historyShown, 8) : 0
+        if historyShown != wanted { historyShown = wanted }
+        if wanted == 0 {
+            growingFrom = nil
+            if reveal != 0 { reveal = 0 }
+            if historyVisible { historyVisible = false }
+        }
+    }
+
     var onClose: (() -> Void)?
     /// Set at launch; shows the update button when a newer release exists.
     var updater: Updater?
@@ -295,6 +368,11 @@ struct OverlayView: View {
     @ViewBuilder private var reply: some View {
         if let r = store.latestReply {
             ScrollView {
+              VStack(alignment: .leading, spacing: 0) {
+                // Your messages and the older replies, above this one: scroll up for them.
+                HistoryList(store: store, ui: ui, liveID: r.id,
+                            baseDir: store.targetThread?["worktreePath"].string
+                                ?? store.project(for: store.targetThread)?["workspaceRoot"].string)
                 // One view per message: a new message slides the old one up and out while
                 // the new one rises in, both crossfading through a blur.
                 ZStack(alignment: .topLeading) {
@@ -309,6 +387,7 @@ struct OverlayView: View {
                         .transition(MessageChange())
                 }
                 .animation(Motion.message, value: r.id)
+              }
             }
             .scrollIndicators(.never)
             // SwiftUI writes the position back while it scrolls. A write of the same value
@@ -321,9 +400,12 @@ struct OverlayView: View {
             }) { _, v in
                 if ui.replyOffset != v[0] { ui.replyOffset = v[0] }
                 if ui.replyMaxOffset != v[1] { ui.replyMaxOffset = v[1] }
+                ui.replyGeometryChanged()
             }
             // Exactly the text's height, capped; a ScrollView's own ideal height can go stale.
-            .frame(height: min(ui.replyTextHeight, ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight))
+            // What you reveal of the history is added to it.
+            .modifier(ReplyHeight(ui: ui))
+            .onChange(of: ui.mode, initial: true) { _, mode in ui.historyFollows(mode) }
             .onChange(of: r.text) {
                 // Follow the stream only while you are at its end: reading further up stays put.
                 if r.streaming, ui.replyOffset >= ui.replyMaxOffset - 24 {
