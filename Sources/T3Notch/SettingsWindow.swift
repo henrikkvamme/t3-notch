@@ -190,6 +190,7 @@ private struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+            if !model.store.linked.isEmpty { linkedEnvironments }
             switches
             buttons
         }
@@ -226,6 +227,40 @@ private struct SettingsView: View {
                 Circle().fill(connectionColor).frame(width: 7, height: 7)
                 Text(connectionText).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
             }
+        }
+    }
+
+    /// The environments the local T3 links to, whose chats the list also shows.
+    private var linkedEnvironments: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Linked environments").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            ForEach(model.store.linked.values.sorted { $0.label < $1.label }, id: \.id) { env in
+                HStack(spacing: 8) {
+                    Image(systemName: "server.rack").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(env.label).font(.system(size: 13))
+                    Spacer(minLength: 8)
+                    Circle().fill(env.state == .connected ? .green : .gray).frame(width: 7, height: 7)
+                    Text(Self.describe(env.state)).font(.system(size: 12)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                .help(Self.detail(env.state))
+            }
+        }
+    }
+
+    private static func describe(_ state: LinkedEnvironment.State) -> String {
+        switch state {
+        case .connecting: return "Connecting"
+        case .connected: return "Connected"
+        case .failed: return "Can't reach"
+        case .unavailable(let reason): return reason
+        }
+    }
+
+    private static func detail(_ state: LinkedEnvironment.State) -> String {
+        switch state {
+        case .failed(let reason), .unavailable(let reason): return reason
+        default: return ""
         }
     }
 

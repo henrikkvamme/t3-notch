@@ -52,8 +52,8 @@ private struct PickerRows: View {
     var body: some View {
         let now = Date()
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(rows.enumerated()), id: \.element["id"].string) { i, t in
-                ThreadRow(thread: t, project: projects[t["projectId"].string ?? ""], now: now)
+            ForEach(Array(rows.enumerated()), id: \.element["key"].string) { i, t in
+                ThreadRow(thread: t, project: projects[Store.projectKey(for: t)], now: now)
                     .contentShape(Rectangle())
                     .onTapGesture { onPick(i) }
                     .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("pickerRows")) }) { frame in

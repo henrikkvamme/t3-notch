@@ -224,7 +224,7 @@ final class DemoController {
         store.demoConnect()
         store.demoApply(["kind": "snapshot", "snapshot": ["snapshotSequence": .number(1), "threads": .array(chats),
                                                           "projects": .array(projects)]])
-        store.focusedThreadId = "demo-dark"
+        store.focusedThreadId = Store.key("demo", "demo-dark")
     }
 
     private static func chat(_ id: String, _ title: String, project: String, minutes: Double,

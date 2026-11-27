@@ -25,10 +25,13 @@ final class RPCClient {
 
     let log = FrameLog()
 
-    /// Exchanges the bearer token for a one-time ticket, then opens the socket.
+    /// Exchanges the bearer token for a one-time ticket, then opens the socket. `httpBase` is the
+    /// local server (`http://127.0.0.1:<port>`) or a linked environment's address, which can be
+    /// https (a T3 relay) and so takes `wss`.
     /// Throws `AppError.auth` on 401/403 so the caller can reissue the token.
-    func connect(runtime: T3Runtime, token: String) async throws {
-        var req = URLRequest(url: runtime.httpBase.appendingPathComponent("api/auth/websocket-ticket/rpc"))
+    func connect(httpBase: URL, token: String) async throws {
+        var req = URLRequest(url: httpBase.appendingPathComponent("api/auth/websocket-ticket/rpc"))
+        req.timeoutInterval = 15
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -42,8 +45,10 @@ final class RPCClient {
         guard status == 200, let ticket = try? JSON.parse(data)["ticket"].string else {
             throw AppError.protocolMismatch("websocket-ticket returned \(status): \(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
         }
-        var comps = URLComponents()
-        comps.scheme = "ws"; comps.host = "127.0.0.1"; comps.port = runtime.port; comps.path = "/ws"
+        guard var comps = URLComponents(url: httpBase.appendingPathComponent("ws"), resolvingAgainstBaseURL: false) else {
+            throw AppError.rpc("bad server address \(httpBase)")
+        }
+        comps.scheme = comps.scheme == "https" ? "wss" : "ws"
         comps.queryItems = [URLQueryItem(name: "wsTicket", value: ticket),
                             URLQueryItem(name: "orchestrationProtocol", value: "2")]
         let task = URLSession.shared.webSocketTask(with: comps.url!)

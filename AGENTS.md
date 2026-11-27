@@ -8,6 +8,8 @@ self-update. `make install` quits and replaces only the dev copy.
 ## Files
 
 - `Sources/T3Notch/RPCClient.swift`: T3's Effect RPC over WebSocket, with JSON serialization.
+- `Sources/T3Notch/LinkedEnvironments.swift`: pairs with and connects to the environments the local T3
+  links to, and keeps their tokens.
 - `Sources/T3Notch/Store.swift`: the state. Covers the shell and thread streams, which thread prompts go
   to, sending, approvals, and protocol-break handling.
 - `Sources/T3Notch/NotchPanel.swift`: the panel, notch geometry, and keyboard shortcuts.
@@ -49,6 +51,28 @@ github.com/pingdotgg/t3code. Their backpressure rule is in `apps/server/src/term
   - `message.dispatch`: `{commandId, threadId, messageId, text, attachments: [], dispatchMode: {type: "queue_after_active"}, createdBy: "user", creationSource: "web"}`.
   - `runtime-request.respond`: `{commandId, threadId, requestId, decision}` for an approval. For a user-input question, send `answers` (by question id) in place of `decision`.
   - `run.interrupt`: `{commandId, threadId, runId}`.
+
+### Linked environments
+
+The overlay also shows chats from the environments the local T3 links to (Settings → Labs → Linked
+environments in T3), the way T3's own client does (`connectLinkedEnvironment` in
+`packages/client-runtime/src/linkedThread.ts`):
+
+1. `peerLinks.names` with `{}` on the local server lists `{links: [{environmentId, label}]}`.
+2. `peerLinks.pairClient` with `{environmentId}` returns `{type: "credential", label, urls, credential}`,
+   or `{type: "unsupported", reason}`. It needs the `access:write` scope on the local token and a
+   full-access link.
+3. The first of `urls` whose `/.well-known/t3/environment` answers with that `environmentId` takes
+   `POST /oauth/token` (form body: `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`,
+   `subject_token=<credential>`,
+   `subject_token_type=urn:t3:params:oauth:token-type:environment-bootstrap`,
+   `requested_token_type=urn:ietf:params:oauth:token-type:access_token`,
+   `scope=orchestration:read orchestration:operate`). It returns `access_token`.
+4. Connect to that address as to the local server, with that token.
+
+Tokens are kept in `~/Library/Application Support/T3Notch/linked-environments.json` (0600). Threads
+and projects are keyed `<environmentId>/<id>` (`Store.key`), and each command goes to the socket of
+the chat's own environment.
 
 ### Which thread is the target
 
