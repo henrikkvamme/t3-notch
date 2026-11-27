@@ -695,7 +695,7 @@ final class Store {
     /// Moves the focused chat one row down (+1) or up (−1) in the sidebar order, wrapping.
     /// Select mode's ⇥ uses it to pick where the selection goes.
     func cycleTarget(_ step: Int) {
-        let ids = sidebarThreads.compactMap { $0["id"].string }
+        let ids = sidebarThreads.compactMap { $0["key"].string }
         guard !ids.isEmpty else { return }
         let now = targetThreadId.flatMap { ids.firstIndex(of: $0) } ?? (step > 0 ? -1 : 0)
         focusedThreadId = ids[((now + step) % ids.count + ids.count) % ids.count]
@@ -1202,18 +1202,20 @@ final class Store {
         return .array(attachments)
     }
 
-    func respond(decision: String) async {
-        guard let req = pendingRequest else { return }
+    /// `request` is the request the card showed: an answer never goes to a newer one.
+    func respond(decision: String, request: String? = nil) async {
+        guard let req = pendingRequest, request == nil || request == req.id else { return }
         if Store.demo { onDemoRespond?(decision); return }
         guard let threadId = target?.threadId else { return }
         await dispatch(["type": "runtime-request.respond", "commandId": .string(UUID().uuidString.lowercased()),
                         "threadId": .string(threadId), "requestId": .string(req.id), "decision": .string(decision)])
     }
 
-    func answer(_ answers: [String: JSON]) async {
-        guard let req = pendingRequest, let threadId = target?.threadId else { return }
-        await dispatch(["type": "runtime-request.respond", "commandId": .string(UUID().uuidString.lowercased()),
-                        "threadId": .string(threadId), "requestId": .string(req.id), "answers": .object(answers)])
+    /// Sends the answers to the question the card showed. False when they did not go out.
+    func answer(_ answers: [String: JSON], request: String) async -> Bool {
+        guard let req = pendingRequest, req.id == request, let threadId = target?.threadId else { return false }
+        return await dispatch(["type": "runtime-request.respond", "commandId": .string(UUID().uuidString.lowercased()),
+                               "threadId": .string(threadId), "requestId": .string(req.id), "answers": .object(answers)])
     }
 
     func interruptRun() async {
@@ -1222,11 +1224,12 @@ final class Store {
                         "threadId": .string(threadId), "runId": .string(runId)])
     }
 
-    private func dispatch(_ command: JSON) async {
+    @discardableResult
+    private func dispatch(_ command: JSON) async -> Bool {
         lastSendError = nil
-        guard let rpc = target?.rpc else { lastSendError = "Not connected to the chat's environment"; return }
-        do { _ = try await rpc.call("orchestration.dispatchCommand", command) }
-        catch { handleCommandError(error) }
+        guard let rpc = target?.rpc else { lastSendError = "Not connected to the chat's environment"; return false }
+        do { _ = try await rpc.call("orchestration.dispatchCommand", command); return true }
+        catch { handleCommandError(error); return false }
     }
 
     private func handleCommandError(_ error: Error) {
@@ -1288,10 +1291,15 @@ final class Store {
     /// Makes T3's window show the chat with this key. A chat picked in the island is then the
     /// chat in T3 as well. T3 comes to the front when it takes a link, so the app that was in
     /// front gets its place back.
+    /// Until then, apps change place because the island asked T3 to show a chat, not because
+    /// you went somewhere else.
+    private(set) var showingInT3Until = Date.distantPast
+
     private func showInT3(_ key: String) {
         guard !Store.demo, let url = link(to: threads[key])?.url, let t3 = runtime?.app,
               let app = t3.bundleURL else { return }
         let front = NSWorkspace.shared.frontmostApplication
+        showingInT3Until = Date().addingTimeInterval(2.5)
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         NSWorkspace.shared.open([url], withApplicationAt: app, configuration: configuration)

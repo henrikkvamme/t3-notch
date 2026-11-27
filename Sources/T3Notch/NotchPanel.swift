@@ -133,7 +133,8 @@ final class PanelController {
                 guard let self else { return }
                 self.rememberFrontApp()
                 // Clicking a popped-up (peek) island opens it fully, ready to type and clip.
-                if self.ui.mode == .peek { self.expand() }
+                // Not a click on its close button: that folds it away.
+                if self.ui.mode == .peek, !self.ui.overHeaderButton { self.expand() }
             }
         }
         // The tour's keycaps go down while you hold their keys.
@@ -150,6 +151,108 @@ final class PanelController {
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isKeyWindow else { return event }
             return MainActor.assumeIsolated { self.handleKey(event) } ? nil : event
+        }
+        ui.onSubmitAnswers = { [weak self] in self?.submitAnswers() }
+        watchRequest()
+        watchLeaving()
+    }
+
+    // MARK: - Leaving
+
+    private var outsideClickMonitor: Any?
+
+    /// The open island is a temporary thing: a click in another app, another app in front,
+    /// another Space, sleep or the lock screen close it. The draft and the selections stay.
+    private func watchLeaving() {
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clickedOutside() }
+        }
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil,
+                              queue: .main) { [weak self] note in
+            let pid = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            MainActor.assumeIsolated {
+                guard let self, pid != ProcessInfo.processInfo.processIdentifier,
+                      Date() > self.store.showingInT3Until else { return }
+                self.leave()
+            }
+        }
+        workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil,
+                              queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leave() }
+        }
+        // Nothing of a chat shows on the lock screen or after a wake, pinned or not.
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
+            workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.leave(always: true) }
+            }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leave(always: true) }
+        }
+    }
+
+    private func clickedOutside() {
+        // A click in the menu bar is not a move to another place: the input menu and the
+        // status items sit beside the island.
+        let p = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
+           p.y >= screen.frame.maxY - NotchGeometry.forScreen(screen).notchSize.height { return }
+        leave()
+    }
+
+    /// Closes the island without taking focus back from where you went. `always`: also a
+    /// pinned island and a peek.
+    private func leave(always: Bool = false) {
+        if always {
+            guard ui.mode != .hidden, clipper == nil else { return }
+        } else {
+            guard ui.mode == .expanded, !ui.pinned, ui.onboarding == nil, clipper == nil, !ui.landing,
+                  !Store.demo else { return }
+        }
+        hide(returnFocus: false)
+    }
+
+    // MARK: - Requests
+
+    /// The request the island shows, and when it came.
+    private var requestSeen: (id: String, at: Date)?
+
+    private func watchRequest() {
+        withObservationTracking { _ = store.pendingRequest?.id } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.requestChanged()
+                self?.watchRequest()
+            }
+        }
+    }
+
+    private func requestChanged() {
+        let id = store.pendingRequest?.id
+        guard id != requestSeen?.id else { return }
+        requestSeen = id.map { ($0, Date()) }
+        // Handled somewhere else: its peek has nothing more to ask.
+        if id == nil, ui.mode == .peek, ui.peekSticky {
+            ui.peekSticky = false
+            if !ui.hovering { schedulePeekHide(after: 1.5) }
+        }
+    }
+
+    /// ⌘⏎ and the button: sends the answers to the question the card shows. They stay in the
+    /// card until T3 has them.
+    private func submitAnswers() {
+        guard let req = store.pendingRequest, req.kind == "user_input",
+              let questions = req.item?["questions"].array else { return }
+        let prefix = req.id + "\u{1F}"
+        let parsed = questions.map(UserInputQuestion.init)
+        guard let answers = UserInputQuestion.answers(parsed, drafts: { self.ui.answerDrafts[prefix + $0] ?? AnswerDraft() })
+        else { return }
+        Task {
+            guard await store.answer(answers, request: req.id) else { return }
+            ui.answerDrafts = ui.answerDrafts.filter { !$0.key.hasPrefix(prefix) }
         }
     }
 
@@ -183,9 +286,17 @@ final class PanelController {
     /// Shows the reply without taking focus; fades after a delay unless hovered.
     func peek(autoHide: Bool, compact: Bool = false) {
         // A chat that needs you, while the pointer's small peek shows: show the full one.
-        if ui.mode == .peek, !compact, ui.peekCompact { withAnimation(Motion.open) { ui.peekCompact = false } }
+        // A finished reply after it: the full peek takes a new time to read.
+        if ui.mode == .peek, !compact {
+            if ui.peekCompact { withAnimation(Motion.open) { ui.peekCompact = false } }
+            peekHideTask?.cancel()
+            ui.peekSticky = !autoHide
+            if autoHide { schedulePeekHide(after: 8) }
+            return
+        }
         guard ui.mode == .hidden else { return }
         ui.peekCompact = compact
+        ui.peekSticky = !autoHide && !compact
         place(on: NotchGeometry.screenUnderMouse())
         present()
         animateMode(.peek, afterLayout: true)
@@ -224,7 +335,10 @@ final class PanelController {
     private func returnFocus() {
         guard panel.isKeyWindow else { return }
         panel.resignKey()
-        if !Store.demo { previousApp?.activate() } // the demo stage stays in front
+        // Only to the app that is still in front: you may have gone to another one.
+        guard !Store.demo, let previous = previousApp, // the demo stage stays in front
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == previous.processIdentifier else { return }
+        previous.activate()
     }
 
     /// Hides the island. `returnFocus: false` when another app is about to take focus
@@ -237,7 +351,10 @@ final class PanelController {
         withAnimation(Motion.close) {
             ui.mode = .hidden
             ui.pickerOpen = false
+            ui.pickerQuery = ""
         }
+        ui.peekSticky = false
+        ui.overHeaderButton = false
         panel.ignoresMouseEvents = true
         stopMouseTimer()
         store.focusLastOpened() // as in `expand`
@@ -437,7 +554,9 @@ final class PanelController {
     private func setHovering(_ hovering: Bool) {
         guard ui.hovering != hovering else { return }
         ui.hovering = hovering
-        if ui.mode == .peek, !hovering { schedulePeekHide(after: Self.peekLeaveDelay) }
+        // A request's peek stays until the request is handled or you fold it away.
+        let waits = ui.peekSticky && store.pendingRequest != nil
+        if ui.mode == .peek, !hovering, !waits { schedulePeekHide(after: Self.peekLeaveDelay) }
         if hovering { peekHideTask?.cancel() }
     }
 
@@ -449,11 +568,27 @@ final class PanelController {
         // Setting on: any focused chat, not over a fullscreen app.
         guard Settings.expandOnHover, store.targetThread != nil, !ui.notchScreenFullscreen else { return }
         let g = NotchGeometry.forScreen(NotchGeometry.screenUnderMouse())
-        if NSMouseInRect(p, g.notchRect.insetBy(dx: -8, dy: 0), false) {
-            peek(autoHide: false, compact: true)
-            schedulePeekHide(after: 1.5) // stays while hovered
+        let rect = g.notchRect.insetBy(dx: -8, dy: 0)
+        // A pointer that passes on its way to a tab or a menu, or that drags something, is
+        // not asking: the pointer must rest on the notch.
+        guard NSMouseInRect(p, rect, false), NSEvent.pressedMouseButtons == 0 else {
+            hoverDwell?.cancel()
+            hoverDwell = nil
+            return
+        }
+        guard hoverDwell == nil else { return }
+        hoverDwell = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            self.hoverDwell = nil
+            guard self.ui.mode == .hidden, NSEvent.pressedMouseButtons == 0,
+                  NSMouseInRect(NSEvent.mouseLocation, rect, false) else { return }
+            self.peek(autoHide: false, compact: true)
+            self.schedulePeekHide(after: 1.5) // stays while hovered
         }
     }
+
+    private var hoverDwell: Task<Void, Never>?
 
     // MARK: - Keyboard
 
@@ -501,12 +636,17 @@ final class PanelController {
     /// Overlay shortcuts. Returns true when the key was handled.
     private func handleKey(_ event: NSEvent) -> Bool {
         if handleOnboardingKey(event) { return true }
-        if let step = Self.vimStep(event) {
+        // An input method is composing: every key is its own until the text is in.
+        if (panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
+        // ⌃N, ⌃P and ⌃K are text keys while there is text to move in.
+        if let step = Self.vimStep(event), ui.pickerOpen || (ui.draft.isEmpty && ui.editingClip == nil) {
             if ui.pickerOpen { movePicker(by: step) } else { scrollReply(by: step) }
             return true
         }
-        let cmd = event.modifierFlags.contains(.command)
-        let approval = store.pendingRequest.map { $0.kind != "user_input" } ?? false
+        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        let cmd = mods.contains(.command)
+        let request = store.pendingRequest
+        let approval = request.map { $0.kind != "user_input" } ?? false
         // The chat list's shortcut is rebindable (⌘K by default).
         if Settings.showChatsKey.matches(event) {
             setPicker(!ui.pickerOpen); return true
@@ -517,27 +657,42 @@ final class PanelController {
         // A selection's comment is open: ⏎ is that field's key, not the approval's.
         let commenting = ui.editingClip.map { id in ui.clips.contains { $0.id == id } } ?? false
         if commenting, event.keyCode == 36 && !cmd { return false }
+        // The approval's keys answer the agent only when nothing else can be meant: no
+        // message, no selection, no list, no comment, and time to have seen the card.
+        let answers = approval && !ui.pickerOpen && !commenting && ui.draft.isEmpty && ui.clips.isEmpty
+            && mods.subtracting(.command).isEmpty
+            && requestSeen.map { $0.id == request?.id && Date().timeIntervalSince($0.at) > 0.3 } == true
         switch event.keyCode {
-        case 53: // Esc
+        case 53: // Esc backs out one level, then closes. It never answers the agent.
             if ui.pickerOpen { setPicker(false); return true }
             if let open = ui.editingClip { // back to the message
                 withAnimation(Motion.content) { ui.editingClip = nil }
                 if ui.clips.contains(where: { $0.id == open }) { focusTextField(); return true }
             }
-            if approval { Task { await store.respond(decision: "decline") }; return true }
             hide(); return true
+        case 13 where mods == .command: // ⌘W
+            hide(); return true
+        case 51 where cmd && answers: // ⌘⌫
+            Task { await store.respond(decision: "decline", request: request?.id) }; return true
+        case 116: // Page Up
+            scrollReply(by: -4); return true
+        case 121: // Page Down
+            scrollReply(by: 4); return true
         case 43 where cmd: // ⌘, opens settings
             onOpenSettings?(); return true
         case 35 where cmd: // ⌘P enters clipping mode
             startClipping(); return true
         case 47 where cmd: // ⌘.
             Task { await store.interruptRun() }; return true
-        case 36 where cmd && approval: // ⌘⏎
-            Task { await store.respond(decision: "acceptForSession") }; return true
+        case 36 where cmd && answers: // ⌘⏎
+            Task { await store.respond(decision: "acceptForSession", request: request?.id) }; return true
+        case 36 where cmd && request?.kind == "user_input" && !ui.pickerOpen
+            && ui.draft.isEmpty && ui.clips.isEmpty: // ⌘⏎ on a question sends its answers
+            submitAnswers(); return true
         case 36 where cmd && !ui.pickerOpen: // ⌘⏎ does what ⏎ does not: queue or steer
             sendDraft(steer: !Settings.enterSteers); return true
-        case 36 where approval && !ui.pickerOpen && ui.draft.isEmpty: // ⏎
-            Task { await store.respond(decision: "accept") }; return true
+        case 36 where answers: // ⏎
+            Task { await store.respond(decision: "accept", request: request?.id) }; return true
         case 125 where ui.pickerOpen: // ↓
             movePicker(by: 1); return true
         case 126 where ui.pickerOpen: // ↑

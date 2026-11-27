@@ -26,6 +26,13 @@ final class OverlayUIState {
     var editingClip: UUID?
     /// The selection whose chip the pointer is on: its picture shows above the field.
     var hoveredClip: UUID?
+    /// The island stays open when you click or go to another app.
+    var pinned = false
+    /// The pointer is on a button in the island's top row.
+    var overHeaderButton = false
+    /// The peek is for a request and stays until the request is handled.
+    var peekSticky = false
+    var onSubmitAnswers: (() -> Void)?
     var draft = ""
     /// Messages on their way to T3. They left the draft, but the focused chat must stay until
     /// each one has its chat (see `Store.holdsTarget`).
@@ -252,6 +259,10 @@ struct OverlayView: View {
                     if let updater = ui.updater, updater.availableVersion != nil {
                         updateButton(updater).transition(.blurReplace.combined(with: .scale(0.6)))
                     }
+                    if ui.mode == .expanded {
+                        headerButton(ui.pinned ? "pin.fill" : "pin") { ui.pinned.toggle() }
+                            .help(ui.pinned ? "Close when you click outside" : "Keep open")
+                    }
                     headerButton("minus") { ui.onClose?() }
                     headerButton("arrow.up.forward") { ui.onOpenInT3?() }
                 }
@@ -292,7 +303,10 @@ struct OverlayView: View {
             // Exactly the text's height, capped; a ScrollView's own ideal height can go stale.
             .frame(height: min(ui.replyTextHeight, ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight))
             .onChange(of: r.text) {
-                if r.streaming { withAnimation(Motion.content) { ui.replyScroll.scrollTo(edge: .bottom) } }
+                // Follow the stream only while you are at its end: reading further up stays put.
+                if r.streaming, ui.replyOffset >= ui.replyMaxOffset - 24 {
+                    withAnimation(Motion.content) { ui.replyScroll.scrollTo(edge: .bottom) }
+                }
             }
             if !r.images.isEmpty {
                 ReplyImages(store: store, images: r.images)
@@ -317,26 +331,26 @@ struct OverlayView: View {
                 let answers = UserInputQuestion.answers(parsed) { draft(req.id, $0) }
                 HStack {
                     Spacer()
-                    Button("Send answers") { if let answers { submitAnswers(answers, request: req.id) } }
+                    Button("Send answers") { ui.onSubmitAnswers?() } // ⌘⏎ too, see `handleKey`
                         .disabled(answers == nil) // as in T3: every question needs an answer
                         .buttonStyle(.glassProminent)
-                        .keyboardShortcut(.return, modifiers: .command)
                 }
             } else {
                 Text(approvalTitle(req)).font(.callout.weight(.semibold))
                 if let detail = approvalDetail(req) {
                     Text(detail).font(.system(size: 12, design: .monospaced)).lineLimit(8)
+                        .textSelection(.enabled)
                         .padding(8).frame(maxWidth: .infinity, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.35)))
                         .transition(.blurReplace)
                 }
                 HStack(spacing: 8) {
-                    Button("Decline  ⎋") { Task { await store.respond(decision: "decline") } }
+                    Button("Decline  ⌘⌫") { Task { await store.respond(decision: "decline", request: req.id) } }
                         .buttonStyle(.glass)
                     Spacer()
-                    Button("For session  ⌘⏎") { Task { await store.respond(decision: "acceptForSession") } }
+                    Button("For session  ⌘⏎") { Task { await store.respond(decision: "acceptForSession", request: req.id) } }
                         .buttonStyle(.glass)
-                    Button("Accept  ⏎") { Task { await store.respond(decision: "accept") } }
+                    Button("Accept  ⏎") { Task { await store.respond(decision: "accept", request: req.id) } }
                         .buttonStyle(.glassProminent)
                         .tint(.orange)
                 }
@@ -472,11 +486,6 @@ struct OverlayView: View {
         ui.onClose?() // sent: tuck the island away and hand focus back
     }
 
-    private func submitAnswers(_ answers: [String: JSON], request: String) {
-        ui.answerDrafts = ui.answerDrafts.filter { !$0.key.hasPrefix(request + "\u{1F}") }
-        Task { await store.answer(answers) }
-    }
-
     private func approvalTitle(_ req: Store.PendingRequest) -> String {
         switch req.item?["requestKind"].string ?? req.kind {
         case "command": return "Run this command?"
@@ -590,7 +599,7 @@ struct OverlayView: View {
 
     /// A bare icon inside a 34pt hit area; it brightens under the pointer.
     private func headerButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        HeaderIcon(symbol: symbol, action: action)
+        HeaderIcon(symbol: symbol, action: action) { ui.overHeaderButton = $0 }
     }
 
     private func markdown(_ s: String) -> AttributedString {
@@ -707,18 +716,21 @@ private struct ReplyImages: View {
 private struct HeaderIcon: View {
     let symbol: String
     let action: () -> Void
+    var onHover: (Bool) -> Void = { _ in }
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(hovering ? .primary : .secondary)
                 .frame(width: 22, height: 22)
                 .padding(6)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onHover { hovering = $0; onHover($0) }
+        .onDisappear { onHover(false) }
         .animation(Motion.snappy, value: hovering)
     }
 }

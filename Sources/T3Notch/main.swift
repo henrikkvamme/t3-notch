@@ -23,7 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.onSelectEnded = { [weak self] in self?.selectTrigger.resume() }
         BrowserBridge.shared.start()
         store.onAttentionNeeded = { [weak self] reason in
-            guard let self, self.panel.mode == .hidden else { return }
+            guard let self, self.panel.mode != .expanded else { return }
+            // A mirrored display is a shared one: nothing opens by itself there.
+            if NSScreen.screens.contains(where: { screen in
+                (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID)
+                    .map { CGDisplayIsInMirrorSet($0) != 0 } ?? false
+            }) { return }
             // T3 Code is in view on some display: it shows the reply and the request itself.
             if let t3 = self.store.runtime?.app?.processIdentifier, T3Visibility.isInView(pid: t3) { return }
             // Finished replies fade; requests that block the agent stay until handled.
