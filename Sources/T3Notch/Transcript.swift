@@ -12,7 +12,10 @@ struct HistoryList: View {
     let baseDir: String?
 
     var body: some View {
-        let all = store.transcript.filter { $0.id != liveID }
+        // Only what came before the reply below. While a run has no reply yet, the reply below
+        // is the last one, and your newer message is not above it.
+        let whole = store.transcript
+        let all = whole.firstIndex { $0.id == liveID }.map { Array(whole[..<$0]) } ?? whole
         let shown = all.suffix(ui.historyShown)
         VStack(alignment: .leading, spacing: 14) {
             ForEach(shown) { entry in
@@ -207,9 +210,16 @@ private final class PassScrollWebView: WKWebView {
 struct ReplyHeight: ViewModifier {
     let ui: OverlayUIState
 
-    func body(content: Content) -> some View {
-        let cap = ui.mode == .peek ? min(220, ui.maxReplyHeight) : ui.maxReplyHeight
-        content.frame(height: min(ui.replyTextHeight + ui.reveal, cap))
+    @ViewBuilder func body(content: Content) -> some View {
+        if ui.mode == .expanded {
+            // The open island has a fixed size: the reply takes the room that is left.
+            content.frame(maxHeight: .infinity)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
+                    if ui.replyViewport != height { ui.replyViewport = height }
+                }
+        } else {
+            content.frame(height: min(ui.replyTextHeight + ui.reveal, min(220, ui.maxReplyHeight)))
+        }
     }
 }
 
@@ -231,5 +241,23 @@ struct ReplyScroller: ViewModifier {
                     }
                 }
             }
+    }
+}
+
+/// How long the run has worked, counted each second: 12s, 2m 14s, 1h 05m.
+struct RunClock: View {
+    let since: Double
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(Self.label(Int(max(0, context.date.timeIntervalSince1970 - since / 1000))))
+                .monospacedDigit()
+        }
+    }
+
+    static func label(_ s: Int) -> String {
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m \(String(format: "%02d", s % 60))s" }
+        return "\(s / 3600)h \(String(format: "%02d", s % 3600 / 60))m"
     }
 }

@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(FrameLog.directory)
     }
     @objc private func toggleShowWhenFinished() { Settings.showWhenChatFinishes.toggle() }
-    @objc private func toggleToolSteps() { Settings.showToolSteps.toggle() }
+    @objc private func toggleToolSteps() { Settings.showThinking.toggle() }
     @objc private func installUpdate() { updater.install() }
     @objc private func checkForUpdates() { Task { await updater.check() } }
     /// Applies a new global shortcut and saves it; false if macOS or another app owns it.

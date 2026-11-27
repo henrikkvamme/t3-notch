@@ -87,7 +87,7 @@ struct ThreadRow: View {
     /// T3's sidebar statuses and colours (`resolveThreadStatusPill` in
     /// `apps/web/src/components/Sidebar.logic.ts`): a question is "Awaiting Input" in indigo,
     /// an approval "Pending Approval" in amber.
-    private var status: (String, Color)? {
+    var status: (String, Color)? {
         if let request = thread["pendingRuntimeRequest"].object {
             return request["kind"]?.string == "user_input" ? ("Awaiting Input", Self.indigo) : ("Pending Approval", Self.amber)
         }
@@ -120,7 +120,7 @@ struct ThreadRow: View {
         return isScratch ? (linkedMachine ?? Self.machineName) : nil
     }
 
-    @ViewBuilder private var providerGlyph: some View {
+    @ViewBuilder var providerGlyph: some View {
         let provider = (thread["providerInstanceId"].string ?? "").lowercased()
         if provider.contains("claude") {
             Image(systemName: "asterisk").font(.system(size: 12, weight: .bold)).foregroundStyle(.orange)

@@ -139,8 +139,8 @@ final class SettingsModel {
     var showWhenChatFinishes = Settings.showWhenChatFinishes {
         didSet { Settings.showWhenChatFinishes = showWhenChatFinishes }
     }
-    var showToolSteps = Settings.showToolSteps {
-        didSet { Settings.showToolSteps = showToolSteps }
+    var showThinking = Settings.showThinking {
+        didSet { Settings.showThinking = showThinking }
     }
     var expandOnHover = Settings.expandOnHover {
         didSet { Settings.expandOnHover = expandOnHover }
@@ -169,7 +169,7 @@ final class SettingsModel {
 
     func refresh() {
         showWhenChatFinishes = Settings.showWhenChatFinishes
-        showToolSteps = Settings.showToolSteps
+        showThinking = Settings.showThinking
         expandOnHover = Settings.expandOnHover
         controlOptionSelect = Settings.controlOptionSelect
         enterSteers = Settings.enterSteers
@@ -308,7 +308,7 @@ private struct SettingsView: View {
             row("Show when chat finishes", caption: "Only applies when T3 is not in view",
                 isOn: $model.showWhenChatFinishes)
             divider
-            row("Show commands while working", isOn: $model.showToolSteps)
+            row("Show thinking while working", caption: "In place of the last reply. Off: one line names the step", isOn: $model.showThinking)
             divider
             row("Select with ⌃⌥", caption: "Hold Control and Option in any app, then click to comment on what is under the pointer",
                 isOn: $model.controlOptionSelect)

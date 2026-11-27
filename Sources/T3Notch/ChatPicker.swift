@@ -28,17 +28,11 @@ struct ChatPicker: View {
                     .coordinateSpace(.named("pickerRows"))
                 }
                 .scrollIndicators(.never)
-                .frame(height: min(listHeight(count: rows.count), ui.maxReplyHeight))
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
         .animation(Motion.content, value: ui.pickerQuery)
         .onChange(of: rows.count, initial: true) { _, n in ui.pickerCount = n }
-    }
-
-    /// The rows' measured height, so the list is only as tall as its content.
-    private func listHeight(count: Int) -> CGFloat {
-        guard count > 0 else { return 0 }
-        return (0..<count).compactMap { ui.pickerRowFrames[$0]?.maxY }.max() ?? CGFloat(count) * 62
     }
 }
 

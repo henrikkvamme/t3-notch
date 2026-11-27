@@ -1043,18 +1043,21 @@ final class Store {
         if subscribedThreadId == targetThreadId {
             if isTargetActive, let run = targetThread?["activeRunId"].string ?? targetThread?["latestRunId"].string {
                 let reply = assistantMessages.filter { $0["runId"].string == run }.max { Self.started($0) < Self.started($1) }
-                // Thinking only, unless the setting also shows commands and other tool steps.
-                let step = activityItems.values
-                    .filter { $0["runId"].string == run && (Settings.showToolSteps || $0["type"].string == "reasoning") }
-                    .max { Self.started($0) < Self.started($1) }
-                if let reply, step.map({ Self.started(reply) >= Self.started($0) }) ?? true {
-                    return makeReply(reply)
+                // The setting puts the thinking and the steps in the reply's place. Without it,
+                // the reply area keeps the agent's last words to you, and `nowLine` names the step.
+                if Settings.showThinking {
+                    let step = activityItems.values.filter { $0["runId"].string == run }
+                        .max { Self.started($0) < Self.started($1) }
+                    if let reply, step.map({ Self.started(reply) >= Self.started($0) }) ?? true {
+                        return makeReply(reply)
+                    }
+                    if let step {
+                        return Reply(id: step["id"].string ?? run, text: Self.describe(step),
+                                     streaming: step["streaming"].bool ?? true, thinking: true, images: [])
+                    }
+                    return Reply(id: "starting-\(run)", text: "", streaming: true, thinking: true, images: [])
                 }
-                if let step {
-                    return Reply(id: step["id"].string ?? run, text: Self.describe(step),
-                                 streaming: step["streaming"].bool ?? true, thinking: true, images: [])
-                }
-                return Reply(id: "starting-\(run)", text: "", streaming: true, thinking: true, images: [])
+                if let reply { return makeReply(reply) }
             }
             if let m = assistantMessages.max(by: { Self.started($0) < Self.started($1) }) {
                 return makeReply(m)
@@ -1066,6 +1069,30 @@ final class Store {
             return Reply(id: lvm?["id"].string ?? "", text: text, streaming: false, thinking: false, images: [])
         }
         return nil
+    }
+
+    /// What the agent does now, in a few words, and when the run started. Nil while it rests.
+    struct NowLine: Equatable {
+        let text: String
+        let since: Double?
+    }
+
+    var nowLine: NowLine? {
+        guard isTargetActive, let thread = targetThread else { return nil }
+        let since = thread["latestRunStartedAt"].epochMs ?? thread["latestRunRequestedAt"].epochMs
+        var text = ["preparing", "starting"].contains(targetStatus) ? "Setting up" : "Working"
+        if subscribedThreadId == targetThreadId, let run = thread["activeRunId"].string ?? thread["latestRunId"].string {
+            let reply = assistantMessages.filter { $0["runId"].string == run }.max { Self.started($0) < Self.started($1) }
+            let step = activityItems.values.filter { $0["runId"].string == run }
+                .max { Self.started($0) < Self.started($1) }
+            if let step, reply.map({ Self.started(step) > Self.started($0) }) ?? true {
+                let words = step["type"].string == "reasoning" ? "Thinking" : Self.describe(step)
+                if !words.trimmingCharacters(in: .whitespaces).isEmpty, words != "$ " { text = words }
+            } else if reply?["streaming"].bool == true {
+                text = "Writing"
+            }
+        }
+        return NowLine(text: text, since: since)
     }
 
     private var assistantMessages: [JSON] {
@@ -1527,9 +1554,11 @@ enum Settings {
 
     /// While the agent works, also show its commands and tool steps, not only its thinking.
     /// Off by default: commands can be long.
-    static var showToolSteps: Bool {
-        get { UserDefaults.standard.bool(forKey: "showToolSteps") }
-        set { UserDefaults.standard.set(newValue, forKey: "showToolSteps") }
+    /// Show the agent's thinking and steps in the reply's place while it works. Off: the reply
+    /// stays, and one line names the step.
+    static var showThinking: Bool {
+        get { UserDefaults.standard.bool(forKey: "showThinking") }
+        set { UserDefaults.standard.set(newValue, forKey: "showThinking") }
     }
 
     /// Peek at the focused chat when the pointer moves onto the notch. On by default.

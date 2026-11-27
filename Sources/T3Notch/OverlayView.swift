@@ -84,6 +84,8 @@ final class OverlayUIState {
     @ObservationIgnored var replyMaxOffset: CGFloat = 0
     /// The reply text's laid-out height; the scroll area is sized to it (up to a cap).
     var replyTextHeight: CGFloat = 0
+    /// The height of the reply area in the open island, so a short reply still fills it.
+    var replyViewport: CGFloat = 0
 
     // MARK: The history above the reply
 
@@ -194,7 +196,7 @@ struct OverlayView: View {
     private var compact: Bool { ui.mode == .peek && ui.peekCompact && store.pendingRequest == nil }
     /// The small peek under the pointer comes and goes with less motion than a full open.
     private var calm: Bool { ui.peekCompact && ui.mode != .expanded }
-    private var openWidth: CGFloat { ui.mode == .peek ? (compact ? 340 : 520) : 680 }
+    private var openWidth: CGFloat { ui.mode == .peek ? 520 : 680 }
     /// The real notch's bottom corners are about this round.
     private var notchRadius: CGFloat { ui.hasRealNotch ? 10 : 12 }
 
@@ -238,14 +240,19 @@ struct OverlayView: View {
     private var layoutKey: [AnyHashable] {
         [store.connection.hashValue, store.protocolBreak?.reason, store.pendingRequest?.id,
          store.pendingRequest?.item != nil, ui.pickerOpen, ui.pickerQuery, store.lastSendError,
-         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, ui.editingClip, ui.hoveredClip,
+         store.latestReply?.text.count, store.latestReply?.images.count, store.latestReply?.thinking, store.nowLine != nil, store.targetThreadId, ui.clips.count, ui.missingPermissions.count, ui.editingClip, ui.hoveredClip,
          ui.onboarding, ui.onboardingKeysLit, ui.onboardingTried]
     }
 
     private var content: some View {
         GlassEffectContainer(spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
-                Color.clear.frame(height: max(ui.notchSize.height - 6, 0))
+                if onChat {
+                    // The chat's name and the buttons sit beside the notch, not under it.
+                    wings
+                } else {
+                    Color.clear.frame(height: max(ui.notchSize.height - 6, 0))
+                }
                 if let b = store.protocolBreak {
                     protocolBanner(b).transition(.blurReplace.combined(with: .move(edge: .top)))
                 }
@@ -258,40 +265,42 @@ struct OverlayView: View {
                     if ui.mode == .expanded && (!ui.draft.isEmpty || !ui.clips.isEmpty) {
                         input.transition(.blurReplace)
                     }
-                } else if compact, let thread = store.targetThread {
-                    // The same facts as the chat's row in T3's sidebar.
-                    ThreadRow(thread: thread, project: store.project(for: thread), now: Date())
-                        .padding(.horizontal, -10).padding(.vertical, -7)
-                        .transition(.blurReplace)
-                } else {
-                    header
-                    if ui.pickerOpen && ui.mode == .expanded {
+                } else if compact {
+                    compactLine.transition(.blurReplace)
+                } else if ui.pickerOpen && ui.mode == .expanded {
+                    VStack(alignment: .leading, spacing: 10) {
                         if ui.onboarding == .chats {
                             Text("Move with ↑ and ↓, pick with ⏎.").font(.callout).foregroundStyle(.secondary)
                                 .transition(.blurReplace)
                         }
                         picker.transition(.blurReplace)
-                    } else {
-                        VStack(alignment: .leading, spacing: 0) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                reply.transition(.blurReplace)
-                                if let req = store.pendingRequest {
-                                    requestCard(req)
-                                        .transition(.blurReplace.combined(with: .scale(0.96, anchor: .top)))
-                                }
+                    }
+                    .frame(height: bodyHeight, alignment: .top)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            reply.transition(.blurReplace)
+                            if !Settings.showThinking, let now = store.nowLine {
+                                nowRow(now).transition(.blurReplace)
                             }
-                            // The input takes no space, spacing included, until you type.
-                            if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
-                                permissionRow.padding(.top, 10).transition(.blurReplace)
-                            }
-                            if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip }) {
-                                clipRow.padding(.top, 10).transition(.blurReplace)
-                            }
-                            if ui.mode == .expanded {
-                                input.padding(.top, ui.inputShows ? 10 : 0).transition(.blurReplace)
+                            if let req = store.pendingRequest {
+                                requestCard(req)
+                                    .transition(.blurReplace.combined(with: .scale(0.96, anchor: .top)))
                             }
                         }
+                        // The input takes no space, spacing included, until you type.
+                        if ui.mode == .expanded && !ui.missingPermissions.isEmpty {
+                            permissionRow.padding(.top, 10).transition(.blurReplace)
+                        }
+                        if ui.mode == .expanded && ui.clips.contains(where: { $0.id == ui.editingClip }) {
+                            clipRow.padding(.top, 10).transition(.blurReplace)
+                        }
+                        if ui.mode == .expanded {
+                            input.padding(.top, ui.inputShows ? 10 : 0).transition(.blurReplace)
+                        }
                     }
+                    // Open, the island keeps one size: a new step or a longer reply moves nothing.
+                    .frame(height: ui.mode == .expanded ? bodyHeight : nil, alignment: .top)
                 }
                 if case .failed(let message) = ui.updater?.state {
                     Text(message).font(.caption).foregroundStyle(.red.opacity(0.9)).lineLimit(3)
@@ -337,45 +346,108 @@ struct OverlayView: View {
         }
     }
 
-    private var header: some View {
-        let title = store.targetThread?["title"].string
-        let machine = store.environmentLabel(for: store.targetThread)
-        let project = [store.projectTitle(for: store.targetThread), machine].compactMap { $0 }
-            .joined(separator: " · ")
-        let subtitle: String? = project.isEmpty ? nil : project
-        return HStack(spacing: 8) {
-            if let title {
-                StatusDotGlyph(indicator: store.indicator == .hidden ? .idle : store.indicator)
-                Text(title).font(.callout.weight(.semibold)).lineLimit(1)
-                    .contentTransition(.interpolate)
-                    .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
-                    .transition(.blurReplace)
-                if let project = subtitle {
-                    Text(project).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+    /// The island shows a chat (or the list of chats), not the tour or a connection problem.
+    private var onChat: Bool {
+        store.connection == .connected
+            && (ui.onboarding == nil || (ui.onboarding == .chats && ui.pickerOpen))
+    }
+
+    /// The fixed height of the open island under the notch.
+    private var bodyHeight: CGFloat { min(440, ui.maxReplyHeight + 60) }
+
+    /// The room on one side of the notch, inside the island's padding.
+    private var wingWidth: CGFloat { max(0, (openWidth - ui.notchSize.width) / 2 - 16 - 8) }
+
+    /// The top row, as tall as the notch: the chat on the left of it, the buttons or the
+    /// chat's state on the right.
+    private var wings: some View {
+        let thread = store.targetThread
+        let title = thread?["title"].string
+        let machine = store.environmentLabel(for: thread)
+        let project = [store.projectTitle(for: thread), machine].compactMap { $0 }.joined(separator: " · ")
+        return HStack(spacing: 0) {
+            HStack(spacing: 7) {
+                if let title {
+                    StatusDotGlyph(indicator: store.indicator == .hidden ? .idle : store.indicator)
+                    Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                        .id(store.targetThreadId) // a new thread blurs in instead of morphing letters
                         .transition(.blurReplace)
+                        .layoutPriority(1)
+                    if ui.mode == .expanded, !project.isEmpty {
+                        Text(project).font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                            .transition(.blurReplace)
+                    }
                 }
             }
-            Spacer(minLength: 8)
-            // Own container with no merge distance, so the two circles stay apart.
-            GlassEffectContainer(spacing: 0) {
-                // Negative spacing keeps the circles 6pt apart while their larger hit areas touch.
-                HStack(spacing: -6) {
-                    if let updater = ui.updater, updater.availableVersion != nil {
-                        updateButton(updater).transition(.blurReplace.combined(with: .scale(0.6)))
+            .frame(width: wingWidth, alignment: .leading)
+            Spacer(minLength: 0)
+            Group {
+                if ui.mode == .expanded {
+                    // Own container with no merge distance, so the circles stay apart.
+                    GlassEffectContainer(spacing: 0) {
+                        // Negative spacing keeps the circles 6pt apart while their larger hit areas touch.
+                        HStack(spacing: -6) {
+                            if let updater = ui.updater, updater.availableVersion != nil {
+                                updateButton(updater).transition(.blurReplace.combined(with: .scale(0.6)))
+                            }
+                            headerButton(ui.pinned ? "pin.fill" : "pin") { ui.pinned.toggle() }
+                                .help(ui.pinned ? "Close when you click outside" : "Keep open")
+                            headerButton("minus") { ui.onClose?() }
+                            headerButton("arrow.up.forward") { ui.onOpenInT3?() }
+                        }
                     }
-                    if ui.mode == .expanded {
-                        headerButton(ui.pinned ? "pin.fill" : "pin") { ui.pinned.toggle() }
-                            .help(ui.pinned ? "Close when you click outside" : "Keep open")
-                    }
-                    headerButton("minus") { ui.onClose?() }
-                    headerButton("arrow.up.forward") { ui.onOpenInT3?() }
+                    // Lay out as the 22pt circles; the extra hit area overhangs without moving anything.
+                    .padding(.vertical, -6)
+                    .padding(.trailing, -6)
+                } else if let thread {
+                    wingState(thread)
                 }
             }
-            // Lay out as the 22pt circles; the extra hit area overhangs without moving anything.
-            .padding(.vertical, -6)
-            .padding(.trailing, -6)
+            .frame(width: wingWidth, alignment: .trailing)
         }
+        .frame(height: max(ui.notchSize.height, 24))
         .animation(Motion.content, value: title)
+    }
+
+    /// A peek's right wing: what the chat waits for, how long it has worked, and its agent.
+    private func wingState(_ thread: JSON) -> some View {
+        let row = ThreadRow(thread: thread, project: store.project(for: thread), now: Date())
+        return HStack(spacing: 7) {
+            if !thread["pendingRuntimeRequest"]["id"].isNull, let (label, color) = row.status {
+                Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(color).lineLimit(1)
+            } else if let since = store.nowLine?.since {
+                RunClock(since: since).font(.system(size: 12)).foregroundStyle(.secondary)
+            } else if let (label, color) = row.status {
+                Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(color).lineLimit(1)
+            } else if store.indicator == .done {
+                Text("Done").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            }
+            row.providerGlyph
+        }
+    }
+
+    /// The small peek's one line: the step while the agent works, else how its reply starts.
+    private var compactLine: some View {
+        let reply = store.latestReply.flatMap { r in
+            r.thinking ? nil : r.text.split(separator: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        }.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: "#>-* ")) }
+        let text = store.nowLine?.text ?? reply
+        return Text(text.map { ReplyContent.markdown($0) } ?? AttributedString("No reply yet"))
+            .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentTransition(.opacity)
+    }
+
+    /// One line for what the agent does now, with the run's clock at the right edge.
+    private func nowRow(_ now: Store.NowLine) -> some View {
+        HStack(spacing: 8) {
+            StatusDotGlyph(indicator: .running)
+            Text(now.text).lineLimit(1).truncationMode(.middle).contentTransition(.opacity)
+            Spacer(minLength: 8)
+            if let since = now.since { RunClock(since: since) }
+        }
+        .font(.callout).foregroundStyle(.secondary)
+        .animation(Motion.content, value: now.text)
     }
 
     @ViewBuilder private var reply: some View {
@@ -399,6 +471,9 @@ struct OverlayView: View {
                         .id(r.id)
                         .transition(MessageChange())
                 }
+                // Open, the reply's place is as tall as the view, so its top can sit at the
+                // top with the history out of sight above it.
+                .frame(minHeight: ui.mode == .expanded ? ui.replyViewport : nil, alignment: .topLeading)
                 .animation(Motion.message, value: r.id)
               }
             }
@@ -427,6 +502,7 @@ struct OverlayView: View {
             }
         } else if ui.mode == .expanded {
             Text("No reply yet").font(.callout).foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
